@@ -17,7 +17,7 @@
  */
 import { ALGORITHM_RULES } from './skill';
 import type { TweetEntry, Settings } from './db';
-import type { RadarItem, ComposeAlgoData } from './xquik';
+import type { RadarItem, ComposeAlgoData, UserTweet } from './xquik';
 
 interface BuildContextParams {
   topic: string;
@@ -29,7 +29,8 @@ interface BuildContextParams {
   length: string;
   goal: string;
   variations: number;
-  algoData?: ComposeAlgoData | null; // xquik'ten gelen canlı Grok verisi
+  algoData?: ComposeAlgoData | null;
+  xUserTweets?: UserTweet[]; // xquik getUserTweets'ten gelen gerçek X verisi (öncelikli)
 }
 
 export function buildSystemPrompt(
@@ -143,23 +144,38 @@ export function buildUserMessage(params: BuildContextParams): string {
     length,
     goal,
     variations,
+    xUserTweets,
   } = params;
 
-  // recentPerf: Son 5 tweet'in engagement puanı.
-  // Formül gerçek algoritma ağırlıklarını yansıtıyor:
-  //   reply × 5 (reply_engaged değil ama en yakın proxy)
-  //   rt × 2, quote × 3, like × 1 (like tek başına anlamsız — 0.5 ağırlık)
-  // Claude bu veriyi okuyup "bu kullanıcı için ne tür tweet tutuyor" çıkarımı yapıyor.
-  const recentPerf =
-    recentTweets
+  // recentPerf: Önce xquik'ten gelen gerçek X verisi kullanılır (xUserTweets).
+  // Yoksa localStorage'daki manuel engagement girişleri (recentTweets) kullanılır.
+  // Formül: like + reply×5 + rt×2 (Grok ağırlıklarına en yakın proxy)
+  const recentPerf = (() => {
+    if (xUserTweets && xUserTweets.length > 0) {
+      // Gerçek X verisi — xquik getUserTweets'ten
+      const sorted = [...xUserTweets].sort((a, b) => {
+        const scoreA = a.likes + a.replies * 5 + a.retweets * 2;
+        const scoreB = b.likes + b.replies * 5 + b.retweets * 2;
+        return scoreB - scoreA;
+      });
+      return sorted
+        .slice(0, 5)
+        .map((t) => {
+          const eng = t.likes + t.replies * 5 + t.retweets * 2;
+          return `"${t.text.slice(0, 80)}..." → likes:${t.likes} replies:${t.replies} rt:${t.retweets} | algo_score:${eng}`;
+        })
+        .join('\n');
+    }
+    // Fallback: localStorage manuel veri
+    return recentTweets
       .slice(0, 5)
       .map((t) => {
         const eng = t.engagement;
-        const score =
-          eng.like + eng.reply * 5 + eng.rt * 2 + eng.quote * 3;
+        const score = eng.like + eng.reply * 5 + eng.rt * 2 + eng.quote * 3;
         return `"${t.text.slice(0, 80)}..." → engagement score: ${score}, tweet score: ${t.score}`;
       })
       .join('\n') || 'No history yet';
+  })();
 
   const trends =
     radarItems
@@ -214,7 +230,13 @@ export function buildCopyPrompt(
  * Yapı: Hook → 2-3 content tweet → CTA.
  */
 export function buildThreadMessage(params: BuildContextParams): string {
-  const { topic, settings, radarItems, goal } = params;
+  const { topic, settings, radarItems, goal, xUserTweets, recentTweets } = params;
+  const topTweet = (xUserTweets && xUserTweets.length > 0)
+    ? xUserTweets.sort((a, b) => (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2))[0]
+    : recentTweets[0];
+  const topTweetNote = topTweet
+    ? `\n## En İyi Tweeti (bunu model al)\n"${topTweet.text?.slice(0, 120)}..."\n`
+    : '';
 
   const trends =
     radarItems
@@ -244,7 +266,7 @@ export function buildThreadMessage(params: BuildContextParams): string {
 
 ## Güncel Trendler (ilgili varsa kullan)
 ${trends}
-
+${topTweetNote}
 ## Output Format — SADECE bu JSON, markdown yok:
 {
   "tweets": [

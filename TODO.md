@@ -88,8 +88,9 @@
 - [x] Settings'e Twitter/X kullanıcı adı alanı eklendi (`twitterUsername` field)
 - [x] `xquik.ts`'e `getUserTweets(apiKey, username, limit)` eklendi — `from:username` query'si ile son N tweeti çekiyor
 - [x] `db.ts`'e `twitterUsername` field eklendi
-- [ ] Generate.tsx'te sayfa açılınca `getUserTweets` ile son 20 tweet çekilsin, `recentPerf` bloğu gerçek engagement verisiyle beslensin
-- [ ] "En iyi performanslı 3 tweet tipin: Data (%82 avg score) > Hot Take > Story" gibi insight üretilsin
+- [x] Generate.tsx'te sayfa açılınca `getUserTweets` ile son 20 tweet çekiliyor, `recentPerf` bloğu gerçek X engagement verisiyle besleniyor
+- [x] `contextBuilder.ts`'te `xUserTweets` parametresi: gerçek X verisi varsa kullan, yoksa localStorage fallback
+- [x] `AccountHealth` bileşeni eklendi — sol panelde hesap durumu, ortalama engagement, en iyi tweet gösteriyor
 - [x] History sayfasına engagement girme ekranı var (manuel fallback) — **TAMAMLANDI**
 
 ---
@@ -132,11 +133,12 @@
 ---
 
 ### 6. Görsel Öneri Sistemi
-**Neden:** Görsel içerik text-only'e göre 2-3x daha fazla engagement alıyor.
+**Neden:** Grok'ta photo_expand (+2) ve vqv (+2) sinyalleri var — görsel eklersek bu sinyaller açılıyor.
 **Yapılacak:**
-- [ ] Her üretilen tweet için "Önerilen görsel tipi" alanı ekle
-  - Örnek: "Data tweet → infografik", "Story → kişisel fotoğraf", "Hot Take → sadece metin"
-- [ ] Görseli xquik media upload ile tweet'e ekleyebilme (subscription gerekli)
+- [x] `MediaSuggestion` bileşeni eklendi — impressionType'a göre önerilen görsel tipi ve neden gösteriyor
+  - Data → İnfografik/Tablo, Story → Kişisel Fotoğraf, Edu → Screenshot, Inspire → Alıntı Kartı
+  - Hot Take → "Görsel Gerekmez" (metin gücüyle çalışıyor)
+- [ ] Görseli xquik media upload ile tweet'e ekleyebilme (subscription gerekli — sonraya bırakıldı)
 
 ---
 
@@ -167,6 +169,18 @@
 - [ ] xquik monitor ile kendi hesabını izle (`tweet.new`, `tweet.reply` event'leri)
 - [ ] Yeni reply gelince bildirim → "Bu reply'a cevap ver" önerisi üret
 - [ ] Golden Hour (ilk 1 saat) içindeyken alert: "Tweet atıldı, şimdi aktif ol"
+
+---
+
+### 10. Dwell Time & İnteraktivite (bu session)
+- [x] `dwell_potential` scoring kriteri eklendi (ağırlık 10, toplam 100 korundu)
+- [x] TweetCard: kelime/180wpm ile "~X dk okuma" badge — 2+ dk = yeşil (Grok +10 puan bölgesi)
+- [x] TweetCard: "Grok Canlı Skor Al" butonu — xquik /score API çağırıyor, pass/fail checklist gösteriyor
+- [x] xquik `step:'algo'` bug fix → `step:'compose'` (daha önce hiç çalışmıyordu)
+- [x] Yeni sinyal ağırlıkları eklendi: `quote`, `photo_expand`, `vqv`, `share`, `quoted_click`
+- [x] TweepCred 65 eşiği skill.ts'e eklendi, `AccountHealth` bileşeninde gösteriliyor
+- [x] Generate: 9 ALGO_TIPS, collapsible sinyal ağırlık tablosu (bar chart + multiplier)
+- [x] SCORING_CRITERIA: `dwell_potential` eklendi, ağırlıklar yeniden dengelendi
 
 ---
 
@@ -203,7 +217,11 @@
 | Premium flag + link uyarısı | ✅ Eklendi |
 | Twitter kullanıcı adı (Settings) | ✅ Alan eklendi |
 | xquik getUserTweets / searchTweets | ✅ xquik.ts'e eklendi |
-| Feedback loop (xquik ile otomatik) | ⏳ Alan hazır, Generate'e bağlanmadı |
+| Feedback loop (xquik ile otomatik) | ✅ Generate açılınca getUserTweets çekiliyor, recentPerf besleniyor |
+| AccountHealth paneli | ✅ Eklendi — TweepCred tahmini, avg engagement, top tweet |
+| MediaSuggestion | ✅ Eklendi — impressionType'a göre görsel tipi önerisi |
+| dwell_potential scoring | ✅ Eklendi — 10 ağırlık, TweetCard'da dwell badge |
+| Grok canlı skor (xquik) | ✅ Eklendi — checklist ile pass/fail görünüyor |
 | xquik compose fallback pipeline | ⏳ Kısmen — algo data çekiliyor, tweet üretimi yok |
 
 ---
@@ -223,9 +241,17 @@
 10. ~~Thread üretim modu~~
 11. ~~Premium flag + TweetCard link uyarısı~~
 
+### ✅ Bu Session'da Tamamlananlar
+12. ~~Feedback loop~~ — getUserTweets → recentPerf gerçek X verisi
+13. ~~AccountHealth bileşeni~~ — TweepCred tahmini, avg engagement, top tweet
+14. ~~MediaSuggestion~~ — impressionType'a göre görsel tipi önerisi
+15. ~~dwell_potential scoring kriteri~~ — ağırlık 10, TweetCard badge
+16. ~~Grok canlı skor (xquik checklist)~~ — pass/fail checklist
+17. ~~xquik step:'algo' bug fix~~ → step:'compose'
+18. ~~9 ALGO_TIPS + sinyal ağırlık tablosu~~ — EmptyState bileşeni
+
 ### ⏳ Sıradakiler
-1. **Sonraki:** Feedback loop tamamlama — `Generate.tsx`'te `getUserTweets` çağır, `recentPerf` bloğunu gerçek engagement ile besle
-2. **Sonraki:** `claude-haiku-3-5` model değişikliği — maliyet düşürme
-3. **Sonra:** xquik compose fallback pipeline (Claude API yokken tweet üretimi)
-4. **Uzun vade:** Monitoring + otonom sistem
-5. **Uzun vade:** Görsel öneri sistemi
+1. **Sonraki:** `claude-haiku-4-5` model değişikliği — maliyet düşürme (claude.ts tek satır)
+2. **Sonraki:** xquik compose fallback pipeline — Claude API yokken xquik 3 adım: compose → refine → score
+3. **Uzun vade:** Monitoring — yeni reply gelince "Golden Hour aktif, cevap ver" bildirimi
+4. **Uzun vade:** Viral tweet kütüphanesi — "bu konuda tutmuş ne var?" sorusunu cevaplanabilir yap

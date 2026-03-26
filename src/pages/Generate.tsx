@@ -5,7 +5,7 @@ import { ContextPreview } from '../components/ContextPreview';
 import { Tooltip } from '../components/Tooltip';
 import { db } from '../lib/db';
 import { xquikApi } from '../lib/xquik';
-import type { RadarItem, ComposeAlgoData } from '../lib/xquik';
+import type { RadarItem, ComposeAlgoData, UserTweet } from '../lib/xquik';
 import { claudeApi } from '../lib/claude';
 import type { TweetVariation, TweetThread } from '../lib/claude';
 import {
@@ -152,6 +152,132 @@ function TimingBadge() {
   );
 }
 
+// İmpresyon tipine göre medya önerisi
+const MEDIA_TIPS: Record<string, { type: string; why: string; color: string }> = {
+  'Data':     { type: 'İnfografik / Tablo', why: 'Sayıları görsel yap — photo_expand sinyali açar (+2 puan)', color: 'border-accent/20 text-accent' },
+  'Story':    { type: 'Kişisel Fotoğraf',   why: 'Yüz + gerçek an = güven, dwell time uzar',                  color: 'border-accent-green/20 text-accent-green' },
+  'Hot Take': { type: 'Görsel Gerekmez',    why: 'Hot take metin gücüyle çalışır — görsel dikkat dağıtır',     color: 'border-[#4a4a55] text-[#8b8b96]' },
+  'Edu':      { type: 'Screenshot / Diyagram', why: 'Adım adım görsel = bookmark oranı artar',                color: 'border-accent-yellow/20 text-accent-yellow' },
+  'Inspire':  { type: 'Alıntı Kartı',       why: 'Temiz bg üstüne tek cümle — RT / quote bait',               color: 'border-accent/20 text-accent' },
+  'Humor':    { type: 'Meme / GIF',         why: 'Varsa güçlendirir, yoksa metin yeterli',                    color: 'border-accent-orange/20 text-accent-orange' },
+};
+
+/**
+ * MediaSuggestion — seçilen impressionType'a göre "hangi görseli ekle" önerisi.
+ * Kaynak: Grok'ta photo_expand (+2) ve vqv (+2) sinyalleri ayrı ölçülüyor.
+ * Görsel = bu iki sinyali açar, medyasız tweet bunları kaçırır.
+ */
+function MediaSuggestion({ impressionType }: { impressionType: string }) {
+  const tip = MEDIA_TIPS[impressionType];
+  if (!tip) return null;
+  return (
+    <div className={`flex items-start gap-3 rounded-xl border px-3.5 py-2.5 mb-3 ${tip.color} bg-white/[0.02]`}>
+      <span className="text-sm shrink-0 mt-0.5">📸</span>
+      <div>
+        <p className={`text-[11px] font-semibold ${tip.color.split(' ')[1]}`}>
+          Önerilen Görsel: {tip.type}
+        </p>
+        <p className="text-[10px] text-[#6b6b72] mt-0.5">{tip.why}</p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * AccountHealth — Sol panelde hesap durumu ve feedback loop özeti.
+ * TweepCred tahmini: gerçek skor API'de yok, hesabın özelliklerine göre tahmin.
+ * userTweets varsa: son tweetlerin ortalama engagement'ı ve en iyi tweet gösterilir.
+ */
+function AccountHealth({ settings, userTweets }: { settings: any; userTweets: UserTweet[] }) {
+  const [open, setOpen] = useState(false);
+
+  // TweepCred kaba tahmini
+  const tweepCredTier = settings.hasPremium
+    ? { label: '65+ muhtemelen', color: 'text-accent-green', note: 'Mavi tik +100 başlangıç → dağıtım eşiği aşıldı' }
+    : { label: 'Belirsiz', color: 'text-accent-yellow', note: '65 altında = sadece 3 tweet seçiliyor. Mavi tik alınırsa garantilenir' };
+
+  // Gerçek engagement ortalaması
+  const avgEng = userTweets.length > 0
+    ? Math.round(userTweets.reduce((s, t) => s + t.likes + t.replies * 5 + t.retweets * 2, 0) / userTweets.length)
+    : null;
+
+  // En iyi tweet
+  const topTweet = userTweets.length > 0
+    ? [...userTweets].sort((a, b) => (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2))[0]
+    : null;
+
+  return (
+    <div className="rounded-xl border border-white/[0.07] overflow-hidden">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-3.5 py-2.5 hover:bg-white/[0.03] transition-colors"
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-medium text-[#8b8b96]">Hesap Durumu</span>
+          {userTweets.length > 0 && (
+            <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent-green/10 text-accent-green border border-accent-green/20">
+              {userTweets.length} tweet
+            </span>
+          )}
+        </div>
+        <span className="text-[#4a4a55] text-[10px]">{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="px-3.5 pb-3.5 pt-1 border-t border-white/[0.05] space-y-3">
+          {/* TweepCred tahmini */}
+          <div>
+            <p className="text-[9px] font-semibold text-[#4a4a55] uppercase tracking-wider mb-1.5">TweepCred Tahmini</p>
+            <div className="flex items-center justify-between">
+              <span className={`text-[11px] font-semibold ${tweepCredTier.color}`}>{tweepCredTier.label}</span>
+              <span className="text-[9px] text-[#4a4a55]">eşik: 65</span>
+            </div>
+            <p className="text-[10px] text-[#6b6b72] mt-1 leading-relaxed">{tweepCredTier.note}</p>
+          </div>
+
+          {/* Gerçek engagement verisi */}
+          {userTweets.length > 0 ? (
+            <div>
+              <p className="text-[9px] font-semibold text-[#4a4a55] uppercase tracking-wider mb-1.5">
+                Son {userTweets.length} Tweet — Gerçek X Verisi
+              </p>
+              {avgEng !== null && (
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] text-[#8b8b96]">Ort. algo skoru</span>
+                  <span className={`text-[11px] font-semibold ${avgEng >= 50 ? 'text-accent-green' : avgEng >= 20 ? 'text-accent-yellow' : 'text-[#6b6b72]'}`}>
+                    {avgEng}
+                  </span>
+                </div>
+              )}
+              {topTweet && (
+                <div className="bg-white/[0.03] rounded-lg px-2.5 py-2">
+                  <p className="text-[9px] text-accent-green mb-1">En iyi tweet</p>
+                  <p className="text-[10px] text-[#e8e8e0] leading-relaxed line-clamp-2">
+                    {topTweet.text.slice(0, 100)}...
+                  </p>
+                  <p className="text-[9px] text-[#4a4a55] mt-1">
+                    {topTweet.likes} like · {topTweet.replies} reply · {topTweet.retweets} rt
+                  </p>
+                </div>
+              )}
+            </div>
+          ) : !settings.twitterUsername ? (
+            <p className="text-[10px] text-[#6b6b72] leading-relaxed">
+              Settings'e Twitter kullanıcı adını ekle → gerçek performans verisi buraya çekilir.
+            </p>
+          ) : !settings.xquikKey ? (
+            <p className="text-[10px] text-[#6b6b72] leading-relaxed">
+              xquik API key gerekli → Settings'te ekle.
+            </p>
+          ) : (
+            <p className="text-[10px] text-[#4a4a55]">Tweetler yükleniyor...</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Grok sinyal ağırlıkları — xquik /compose API'den alınan canlı veri (Mart 2026)
 const SIGNAL_WEIGHTS = [
   { signal: 'reply_engaged_by_author', weight: 75,   color: 'bg-accent-green',  label: 'Reply Chain (sen yanıt verdiysen)',  mult: '150x like' },
@@ -293,6 +419,7 @@ export function Generate() {
   const personaList = ['hurricane', 'tr_educational', 'tr_controversial', 'tr_casual'];
   const [radarItems, setRadarItems] = useState<RadarItem[]>([]);
   const [algoData, setAlgoData] = useState<ComposeAlgoData | null>(null);
+  const [userTweets, setUserTweets] = useState<UserTweet[]>([]);
   const [mode, setMode] = useState<'tweet' | 'thread'>('tweet');
   const [results, setResults] = useState<TweetVariation[]>([]);
   const [thread, setThread] = useState<TweetThread | null>(null);
@@ -311,6 +438,12 @@ export function Generate() {
     if (settings.xquikKey) {
       xquikApi.getRadar(settings.xquikKey, 8).then(setRadarItems).catch(() => {});
       xquikApi.getAlgoData(settings.xquikKey, 'general').then(setAlgoData).catch(() => {});
+      // Feedback loop: kullanıcının kendi tweetlerini çek → recentPerf gerçek data ile dolsun
+      if (settings.twitterUsername) {
+        xquikApi.getUserTweets(settings.xquikKey, settings.twitterUsername, 20)
+          .then(setUserTweets)
+          .catch(() => {});
+      }
     }
   }, []);
 
@@ -321,10 +454,11 @@ export function Generate() {
       topic: topic || '(konu girilmedi)',
       persona, settings,
       recentTweets: db.getTweets(),
+      xUserTweets: userTweets,
       radarItems, impressionType, length, goal, variations,
     });
     setCopyPrompt(buildCopyPrompt(sys, user));
-  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData]);
+  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets]);
 
   const handleGenerate = useCallback(async () => {
     if (!topic.trim()) return;
@@ -333,7 +467,7 @@ export function Generate() {
     const sys = buildSystemPrompt(persona, settings, algoData);
 
     if (mode === 'thread') {
-      const user = buildThreadMessage({ topic, persona, settings, recentTweets: db.getTweets(), radarItems, impressionType, length, goal, variations });
+      const user = buildThreadMessage({ topic, persona, settings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
       if (settings.claudeKey) {
         try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
@@ -342,7 +476,7 @@ export function Generate() {
         setError("Claude API key yok. Thread prompt panoya kopyalandı — claude.ai'a yapıştır.");
       }
     } else {
-      const user = buildUserMessage({ topic, persona, settings, recentTweets: db.getTweets(), radarItems, impressionType, length, goal, variations });
+      const user = buildUserMessage({ topic, persona, settings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
       if (settings.claudeKey) {
         try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
@@ -352,7 +486,7 @@ export function Generate() {
       }
     }
     setLoading(false);
-  }, [topic, persona, settings, radarItems, impressionType, length, goal, variations, mode, algoData]);
+  }, [topic, persona, settings, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets]);
 
   const handleSaveTweet = (tweet: TweetVariation) => {
     db.saveTweet({ text: tweet.text, topic, persona: personaId, score: tweet.total_score, scores: tweet.scores, scoreReason: tweet.score_reason, engagement: { like: 0, reply: 0, rt: 0, quote: 0 } });
@@ -528,6 +662,9 @@ export function Generate() {
         {/* Context preview */}
         <ContextPreview prompt={copyPrompt} />
 
+        {/* Hesap Durumu + Feedback Loop */}
+        <AccountHealth settings={settings} userTweets={userTweets} />
+
         {/* Algo kaynak badge */}
         <div className="flex items-center gap-2 px-1">
           <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${algoData ? 'bg-accent-green' : 'bg-[#6b6b72]'}`} />
@@ -594,6 +731,7 @@ export function Generate() {
         {/* Tweet sonuçları */}
         {!loading && results.length > 0 && (
           <div className="space-y-3">
+            <MediaSuggestion impressionType={impressionType} />
             {results.map((tweet, i) => (
               <TweetCard
                 key={i}
