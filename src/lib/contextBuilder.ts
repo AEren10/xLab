@@ -15,7 +15,7 @@
  *     (engagement puanı = like + reply×5 + rt×2 + quote×3 — algoritma ağırlıklarına göre)
  *   - trends: xquik radar'dan gelen güncel başlıklar
  */
-import { ALGORITHM_RULES } from './skill';
+import { ALGORITHM_RULES, ALGORITHM_RULES_SHORT } from './skill';
 import type { TweetEntry, Settings } from './db';
 import type { RadarItem, ComposeAlgoData, UserTweet } from './xquik';
 
@@ -217,11 +217,46 @@ ${recentPerf}
 - First line must hook immediately`;
 }
 
+/**
+ * buildCopyPrompt — claude.ai'a yapıştırılacak kısa prompt.
+ *
+ * Neden ayrı?
+ *   Full prompt (~1500 token) + 3 varyasyon JSON output = ~2500 token total.
+ *   claude.ai bazen yanıtı kesiyor. Bu versiyon ~800 tokena düşürür.
+ *   Kısaltılanlar: ALGORITHM_RULES → ALGORITHM_RULES_SHORT (~150 token),
+ *   persona örnekleri yok, scoring 3 alana indirgendi.
+ */
 export function buildCopyPrompt(
-  systemPrompt: string,
-  userMessage: string
+  _systemPrompt: string, // full system prompt — copy modda kullanılmıyor
+  userMessage: string,
+  persona: any = null,
+  settings: any = null,
+  algoData: any = null,
 ): string {
-  return `${systemPrompt}\n\n---\n\n${userMessage}`;
+  const algoSection = (() => {
+    // xquik canlı veri varsa onu kullan (zaten kısa)
+    if (algoData?.contentRules?.length) {
+      return `## X Algoritması (Grok canlı)\n${algoData.contentRules.slice(0, 8).map((r: string) => `- ${r}`).join('\n')}`;
+    }
+    return ALGORITHM_RULES_SHORT;
+  })();
+
+  const toneNote = settings?.toneProfile ? `\nTon notu: ${settings.toneProfile}\n` : '';
+  const personaLine = persona
+    ? `Persona: ${persona.name || ''} — ${persona.tone || ''}\nDil kuralları: ${(persona.style_rules || []).slice(0, 3).join('; ')}`
+    : 'Persona: Türkçe, doğrudan, insan gibi';
+
+  return `Sen bir X/Twitter içerik uzmanısın. Türkçe tweet üretiyorsun.
+${algoSection}
+${personaLine}${toneNote}
+OUTPUT FORMAT — SADECE bu JSON'u yaz, hiç açıklama ekleme:
+[{"text":"tweet metni","scores":{"hook":0-22,"reply_potential":0-15,"dwell_potential":0-10},"total_score":0-100,"score_reason":"tek cümle"}]
+
+---
+
+${userMessage}
+
+HATIRLATMA: Sadece JSON array döndür. Markdown code block kullanma. Açıklama yapma. Türkçe yaz.`;
 }
 
 /**

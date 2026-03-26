@@ -135,6 +135,21 @@ Yapilar: em dash, bullet list halinde tweet, "Oncelikle X, ardindan Y, son olara
 
 // Toplam ağırlık = 100
 // dwell_potential: P(dwell) Grok'un model outputlarından biri — 2+ dakika okutan içerik +10 puan
+/**
+ * Copy-paste modu için kısa algoritma özeti.
+ * Tam ALGORITHM_RULES ~600 token — claude.ai'da yanıt kesilir.
+ * Bu versiyon ~150 token, en kritik kuralları içeriyor.
+ */
+export const ALGORITHM_RULES_SHORT = `
+## X Algoritması Kritik Kurallar (Grok 2026)
+SINYAL AĞIRLIKLARI: reply_engaged=75 (EN KRİTİK), reply=13.5, dwell_2min=+10, bookmark=10, like=0.5 (anlamsız)
+YAPMA: hashtag, emoji, em dash(—), link tweet içinde, obvious engagement bait
+YAP: hook ilk cümle, soru/açık uç ile bitir, kısa cümle ritmi, insan gibi yaz
+DWELL: 2+ dakika okutan içerik +10 puan — uzun/data/story formatı tercih et
+GOLDEN HOUR: ilk 1 saatte hemen kendi tweetine reply yaz, gelen replylara cevap ver
+AI DİL YASAK: "delve", "tapestry", "nuanced", "son derece", bullet-list tweet, her cümle aynı uzunluk
+`.trim();
+
 export const SCORING_CRITERIA = {
   hook:            { weight: 22, label: 'Hook Gücü',         description: 'İlk cümle scroll durduruyor mu? 3 saniye kuralı.' },
   information:     { weight: 18, label: 'Bilgi Değeri',       description: 'Spesifik insight, stat veya taze bakış açısı var mı?' },

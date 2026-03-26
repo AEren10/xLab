@@ -19,12 +19,14 @@ export interface TweetEntry {
   text: string;
   topic: string;
   persona: string;
+  impressionType?: string; // Data / Story / Hot Take / Edu / Inspire / Humor
   score: number;
   scores: Record<string, number>;
   scoreReason: string;
   createdAt: string;
   postedAt?: string;
   engagement: { like: number; reply: number; rt: number; quote: number };
+  xSynced?: boolean; // true = engagement X'ten çekildi, manuel değil
 }
 
 export interface Settings {
@@ -97,10 +99,24 @@ export const db = {
     const avgScore = tweets.length
       ? tweets.reduce((a, t) => a + t.score, 0) / tweets.length
       : 0;
+
+    // Tip bazında analiz: hangi içerik tipi ne kadar engagement alıyor?
+    // Engagement skoru = like + reply×5 + rt×2 + quote×3 (Grok ağırlıklarına göre)
+    const byType: Record<string, { count: number; totalEng: number; avgEng: number }> = {};
+    for (const t of tweets) {
+      const type = t.impressionType || 'Diğer';
+      const eng = t.engagement.like + t.engagement.reply * 5 + t.engagement.rt * 2 + t.engagement.quote * 3;
+      if (!byType[type]) byType[type] = { count: 0, totalEng: 0, avgEng: 0 };
+      byType[type].count++;
+      byType[type].totalEng += eng;
+      byType[type].avgEng = Math.round(byType[type].totalEng / byType[type].count);
+    }
+
     return {
       total: tweets.length,
       posted: posted.length,
       avgScore: Math.round(avgScore),
+      byType, // { 'Data': { count: 3, avgEng: 42 }, 'Hot Take': { ... } }
     };
   },
 };

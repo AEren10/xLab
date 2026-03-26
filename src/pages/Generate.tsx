@@ -426,6 +426,7 @@ export function Generate() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [copyPrompt, setCopyPrompt] = useState('');
+  const [promptCopied, setPromptCopied] = useState(false);
 
   useEffect(() => {
     fetch(`/personas/${personaId}.json`)
@@ -457,7 +458,8 @@ export function Generate() {
       xUserTweets: userTweets,
       radarItems, impressionType, length, goal, variations,
     });
-    setCopyPrompt(buildCopyPrompt(sys, user));
+    // Copy-paste modu için kısa prompt (claude.ai'da kesilme sorunu)
+    setCopyPrompt(buildCopyPrompt(sys, user, persona, settings, algoData));
   }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets]);
 
   const handleGenerate = useCallback(async () => {
@@ -472,7 +474,7 @@ export function Generate() {
         try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
       } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user)).catch(() => {});
+        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, settings, algoData)).catch(() => {});
         setError("Claude API key yok. Thread prompt panoya kopyalandı — claude.ai'a yapıştır.");
       }
     } else {
@@ -481,7 +483,7 @@ export function Generate() {
         try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
       } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user)).catch(() => {});
+        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, settings, algoData)).catch(() => {});
         setError("Claude API key yok. Prompt panoya kopyalandı — claude.ai'a yapıştır.");
       }
     }
@@ -489,7 +491,12 @@ export function Generate() {
   }, [topic, persona, settings, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets]);
 
   const handleSaveTweet = (tweet: TweetVariation) => {
-    db.saveTweet({ text: tweet.text, topic, persona: personaId, score: tweet.total_score, scores: tweet.scores, scoreReason: tweet.score_reason, engagement: { like: 0, reply: 0, rt: 0, quote: 0 } });
+    db.saveTweet({
+      text: tweet.text, topic, persona: personaId,
+      impressionType, // hangi tipte üretildiğini kaydet — feedback loop için
+      score: tweet.total_score, scores: tweet.scores, scoreReason: tweet.score_reason,
+      engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
+    });
     if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, tweet.text, topic);
   };
 
@@ -692,11 +699,19 @@ export function Generate() {
           </button>
 
           <button
-            onClick={async () => { await navigator.clipboard.writeText(copyPrompt); }}
+            onClick={async () => {
+              await navigator.clipboard.writeText(copyPrompt);
+              setPromptCopied(true);
+              setTimeout(() => setPromptCopied(false), 3000);
+            }}
             disabled={!topic.trim()}
-            className="w-full py-2 rounded-xl border border-white/[0.08] hover:bg-white/[0.04] hover:border-white/[0.12] disabled:opacity-30 disabled:cursor-not-allowed text-[#8b8b96] text-xs transition-all"
+            className={`w-full py-2 rounded-xl border disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-all ${
+              promptCopied
+                ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
+                : 'border-white/[0.08] hover:bg-white/[0.04] hover:border-white/[0.12] text-[#8b8b96]'
+            }`}
           >
-            Sadece Promptu Kopyala
+            {promptCopied ? '✓ Kopyalandı — claude.ai\'a yapıştır' : 'Sadece Promptu Kopyala'}
           </button>
         </div>
       </div>
