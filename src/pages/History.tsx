@@ -2,13 +2,7 @@ import { useState, useEffect } from 'react';
 import { db } from '../lib/db';
 import type { TweetEntry } from '../lib/db';
 import { SCORING_CRITERIA } from '../lib/skill';
-
-function scoreColor(score: number) {
-  if (score >= 85) return 'text-accent-green bg-accent-green/10';
-  if (score >= 70) return 'text-accent-yellow bg-accent-yellow/10';
-  if (score >= 50) return 'text-accent-orange bg-accent-orange/10';
-  return 'text-accent-red bg-accent-red/10';
-}
+import { scoreColorSimple as scoreColor } from '../lib/utils';
 
 function EngagementInput({
   label,

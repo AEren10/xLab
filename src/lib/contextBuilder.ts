@@ -1,6 +1,23 @@
+/**
+ * contextBuilder — Claude'a gönderilecek prompt'u inşa eder.
+ *
+ * İki parçadan oluşur:
+ *   buildSystemPrompt → "Sen kimsin, nasıl davranacaksın" — her üretimde aynı
+ *   buildUserMessage  → "Şu konuda şu tweet'i üret" — her üretimde değişir
+ *
+ * Sistem prompt katmanları (üstten alta öncelik sırası):
+ *   1. toneProfile  — kullanıcının "daha cesur yaz" gibi özel notları
+ *   2. algoBlock    — canlı Grok kuralları (xquik) VEYA statik skill.ts fallback
+ *   3. Persona      — hurricane / tr_educational vb. persona JSON'u
+ *
+ * Kullanıcı mesajında:
+ *   - recentPerf: localStorage'daki son 5 tweet + manuel girilen engagement puanı
+ *     (engagement puanı = like + reply×5 + rt×2 + quote×3 — algoritma ağırlıklarına göre)
+ *   - trends: xquik radar'dan gelen güncel başlıklar
+ */
 import { ALGORITHM_RULES } from './skill';
 import type { TweetEntry, Settings } from './db';
-import type { RadarItem } from './xquik';
+import type { RadarItem, ComposeAlgoData } from './xquik';
 
 interface BuildContextParams {
   topic: string;
@@ -12,9 +29,14 @@ interface BuildContextParams {
   length: string;
   goal: string;
   variations: number;
+  algoData?: ComposeAlgoData | null; // xquik'ten gelen canlı Grok verisi
 }
 
-export function buildSystemPrompt(persona: any, settings: Settings): string {
+export function buildSystemPrompt(
+  persona: any,
+  settings: Settings,
+  algoData?: ComposeAlgoData | null
+): string {
   const styleRules = (persona?.style_rules || [])
     .map((r: string) => `- ${r}`)
     .join('\n');
@@ -33,15 +55,49 @@ export function buildSystemPrompt(persona: any, settings: Settings): string {
     )
     .join('\n');
 
+  const toneNote = settings.toneProfile
+    ? `\n## Özel Ton Notu (ÖNCE BU)\n${settings.toneProfile}\n`
+    : '';
+
+  // algoData öncelik sırası:
+  // 1. xquik compose endpoint'inden gelen canlı Grok verisi (API key varsa çekilir)
+  // 2. Statik ALGORITHM_RULES (skill.ts) — fallback, her zaman geçerli ama güncel olmayabilir
+  //
+  // İki versiyonu AYNI ANDA eklemiyoruz — canlı veri gerçek içerik döndürdüyse
+  // statik kuralı prompt'a dahil etme, token israfı olur (~600 token).
+  // Canlı verinin içerik döndürmediği durumlarda (boş endpoint) statik devreye girer.
+  const liveAlgoContent = algoData
+    ? [
+        algoData.rawText || '',
+        algoData.algoSummary || '',
+        algoData.contentRules?.length
+          ? algoData.contentRules.map((r) => `- ${r}`).join('\n')
+          : '',
+        algoData.engagementSignals && Object.keys(algoData.engagementSignals).length
+          ? Object.entries(algoData.engagementSignals)
+              .sort(([, a], [, b]) => b - a)
+              .map(([k, v]) => `- ${k}: ${v}`)
+              .join('\n')
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+        .trim()
+    : '';
+
+  const algoBlock = liveAlgoContent
+    ? `## X Algorithm Rules (Grok — Canlı Veri)\n${liveAlgoContent}`
+    : ALGORITHM_RULES; // canlı veri boşsa statik kural devreye girer
+
   return `# Tweet Generation Expert
 
-${ALGORITHM_RULES}
+${algoBlock}
 
 ## Active Persona: ${persona?.name || 'Default'}
 Tone: ${persona?.tone || 'casual, direct'}
 Language: ${persona?.language || 'tr'}
 Niche: ${settings.niche || 'general'}
-
+${toneNote}
 ### Style Rules
 ${styleRules}
 
@@ -56,16 +112,31 @@ Return ONLY a JSON array. No markdown fences, no explanation:
 [
   {
     "text": "tweet text",
-    "scores": { "hook": 0-25, "information": 0-20, "reply_potential": 0-15, "algorithm": 0-15, "persona": 0-15, "originality": 0-10 },
+    "scores": {
+      "hook": 0-22,
+      "information": 0-18,
+      "reply_potential": 0-15,
+      "dwell_potential": 0-10,
+      "algorithm": 0-12,
+      "persona": 0-12,
+      "originality": 0-11
+    },
     "total_score": 0-100,
     "score_reason": "one sentence explanation"
   }
-]`;
+]
+
+## Scoring Notes
+- dwell_potential: Kaç kişi 2+ dakika okur? Uzun/thread/data/story = yüksek. Kısa hot take = düşük.
+- hook: İlk cümle 3 saniyede scroll durduruyor mu? Zayıf hook = dwell 0 demek.
+- reply_potential: Soru veya açık uç var mı? reply_engaged_by_author = like'ın 150 katı.
+- algorithm: Hashtag yok, emoji yok, em dash yok, link reply'da. Tüm Grok kurallarına uyuyor mu?`;
 }
 
 export function buildUserMessage(params: BuildContextParams): string {
   const {
     topic,
+    settings,
     recentTweets,
     radarItems,
     impressionType,
@@ -74,6 +145,11 @@ export function buildUserMessage(params: BuildContextParams): string {
     variations,
   } = params;
 
+  // recentPerf: Son 5 tweet'in engagement puanı.
+  // Formül gerçek algoritma ağırlıklarını yansıtıyor:
+  //   reply × 5 (reply_engaged değil ama en yakın proxy)
+  //   rt × 2, quote × 3, like × 1 (like tek başına anlamsız — 0.5 ağırlık)
+  // Claude bu veriyi okuyup "bu kullanıcı için ne tür tweet tutuyor" çıkarımı yapıyor.
   const recentPerf =
     recentTweets
       .slice(0, 5)
@@ -97,6 +173,10 @@ export function buildUserMessage(params: BuildContextParams): string {
     extended: '280-500 characters',
   };
 
+  const premiumNote = settings.hasPremium === false
+    ? '- HESAP FREE: Tweet içine link YAZMA, link varsa reply\'a yaz. 280 karakter sınırı.'
+    : '- Hesap Premium: Extended tweet (500 karakter) ve link kullanılabilir.';
+
   return `## Task
 Generate ${variations} tweet variation(s) about: "${topic}"
 
@@ -105,6 +185,7 @@ Generate ${variations} tweet variation(s) about: "${topic}"
 - Length: ${length} (${lengthGuide[length] || '200-280 characters'})
 - Goal: ${goal}
 - Language: Turkish
+- ${premiumNote}
 
 ## Current Trending Topics (use if relevant)
 ${trends}
@@ -125,4 +206,54 @@ export function buildCopyPrompt(
   userMessage: string
 ): string {
   return `${systemPrompt}\n\n---\n\n${userMessage}`;
+}
+
+/**
+ * Thread modu için kullanıcı mesajı.
+ * Thread'ler standalone tweet'e göre 3x daha fazla toplam engagement alıyor (2026).
+ * Yapı: Hook → 2-3 content tweet → CTA.
+ */
+export function buildThreadMessage(params: BuildContextParams): string {
+  const { topic, settings, radarItems, goal } = params;
+
+  const trends =
+    radarItems
+      .slice(0, 3)
+      .map((r) => `- ${r.title}`)
+      .join('\n') || 'No trends available';
+
+  const premiumNote = settings.hasPremium === false
+    ? 'FREE hesap: Link tweet içine yazma, reply\'a yaz.'
+    : 'Premium: Link ve extended içerik kullanılabilir.';
+
+  return `## Task
+"${topic}" konusunda 4-5 tweet'lik bir thread üret.
+
+## Thread Yapısı
+1. Hook tweet — scroll durduracak, merak uyandıracak ilk cümle. Soru veya şaşırtıcı stat.
+2-3. Content tweet(ler) — asıl değeri ver. Her tweet bağımsız okunabilir olsun.
+4-5. CTA tweet — "bunu bookmarkla", "dene", soru sor — reply çek.
+
+## Kurallar
+- Her tweet 180-260 karakter (hızlı okunuyor)
+- Türkçe, hashtag yok, emoji yok
+- Thread içinde aynı kelimeyi tekrarlama
+- Her tweet bir sonrakini merak ettirmeli
+- ${premiumNote}
+- Goal: ${goal}
+
+## Güncel Trendler (ilgili varsa kullan)
+${trends}
+
+## Output Format — SADECE bu JSON, markdown yok:
+{
+  "tweets": [
+    { "text": "tweet 1", "position": 1, "type": "hook" },
+    { "text": "tweet 2", "position": 2, "type": "content" },
+    { "text": "tweet 3", "position": 3, "type": "content" },
+    { "text": "tweet 4", "position": 4, "type": "cta" }
+  ],
+  "total_score": 0-100,
+  "score_reason": "tek cümle"
+}`;
 }

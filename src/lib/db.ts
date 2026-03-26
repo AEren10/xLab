@@ -1,3 +1,14 @@
+/**
+ * db — localStorage tabanlı basit veri katmanı.
+ *
+ * Neden localStorage?
+ *   - Sunucu yok, kurulum yok, hız yok — saf client-side uygulama
+ *   - Tweet geçmişi + settings tarayıcıda kalır, paylaşılmaz
+ *   - Limit: ~5MB (tweet metinleri küçük, binlerce tweet sığar)
+ *
+ * Tweet engagement puanları (like/reply/rt/quote) manuel girilir (History sayfası).
+ * İleride xquik getUserTweets ile otomatik doldurulacak (feedback loop).
+ */
 const KEYS = {
   tweets: 'tl_tweets',
   settings: 'tl_settings',
@@ -22,6 +33,8 @@ export interface Settings {
   niche: string;
   defaultPersona: string;
   toneProfile: string;
+  twitterUsername: string; // feedback loop: from:kullanici son tweetleri çekmek için
+  hasPremium: boolean;     // false = link tweet içine yazma, thread öncelikli
 }
 
 const get = <T>(key: string, fallback: T): T => {
@@ -71,6 +84,8 @@ export const db = {
       niche: '',
       defaultPersona: 'hurricane',
       toneProfile: '',
+      twitterUsername: '',
+      hasPremium: false,
     }),
 
   saveSettings: (s: Partial<Settings>) =>

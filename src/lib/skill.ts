@@ -1,41 +1,66 @@
+/**
+ * skill.ts — X algoritması kuralları ve scoring sistemi
+ *
+ * ALGORITHM_RULES:
+ *   Statik fallback. xquik key yoksa veya /compose endpoint boş dönerse bu kullanılır.
+ *   Kaynak: xai-org/x-algorithm (Ocak 2026) + Hurricane @hrrcnes doğrulaması (59B impression)
+ *   Güncelleme: xquik compose API'den canlı veri gelince contextBuilder bu bloğu bypass eder.
+ *
+ * SCORING_CRITERIA:
+ *   Claude tweet üretirken her kategoriye puan verir.
+ *   Ağırlıklar toplamı = 100. TweetCard ve History bu verileri bar chart olarak gösterir.
+ *
+ * TIMING_SLOTS:
+ *   Istanbul UTC+3 saatine göre. TimingBadge bileşeni bunu kullanır.
+ *   "best" slot = akşam peak (20:00-22:30) — Türk kullanıcı trafiğinin zirvesi.
+ */
 // Source: xai-org/x-algorithm (Jan 2026) + Hurricane @hrrcnes verified intel (59B impressions)
 // Last updated: March 2026
 
 export const ALGORITHM_RULES = `
-## X Algorithm Rules (Phoenix / Grok System) — March 2026
+## X Algorithm Rules (Grok Transformer System) — March 2026
 
 ### Architecture
-X artik klasik algoritma kullanmiyor. Phoenix sistemi var:
+X artik klasik algoritma kullanmiyor. Ocak 2026'dan itibaren tam Grok sistemi:
 - Grok tabanli transformer model — hand engineered feature sifir, makine ogreniyor
-- Pipeline: Candidate Pipeline → Thunder (post storage) → Phoenix (Grok ranking) → Home Mixer
+- Pipeline: Candidate Pipeline → Thunder (post storage) → Grok Ranking → Home Mixer
 - ~30-40 modul paralel calisiyor, Grok bunlarin kontrolcusu
 - final_score = toplam(agirlik x olasilik) — "bu kullanici bunu gorurse ne yapar?" tahmini
+- NOT: "Phoenix" eski mimari adiydi, Ocak 2026'da Grok transformer'a tam gecis yapildi
 
 ### Engagement Signal Weights
 POZITIF (yuksekten dusuge):
-- reply_engaged_by_author: 75 — EN KRITIK: kendi reply chain'ini ac
-- reply: 13.5
-- profile_click: 12
-- click: 11
-- dwell_time_2min: 10
-- bookmark: 10
-- share_via_dm: 9
-- share_via_copy_link: 8
-- follow_author: 5
+- reply_engaged_by_author: 75 — EN KRITIK: kendi reply chain'ini ac (like'in 150 kati)
+- reply: 13.5 (like'in 27 kati)
+- profile_click: 12 (like'in 12 kati)
+- click: 11 — tweet'e tiklanmak
+- dwell_time_2min: 10 — 2+ dakika okuma (P(dwell) Grok'un model outputlarindan biri)
+- bookmark: 10 — "kaydet" sinyali, paylasim kadar guclu
+- share_via_dm: 9 — DM ile paylasim = yuksek deger icerigi sinyali
+- share_via_copy_link: 8 — link kopyalama
+- follow_author: 5 — tweetden follow = en guclu buyume sinyali
+- share: 4 — genel paylasim menüsü
+- quote: 3 — quote tweet ayri olculuyor
+- quoted_click: 2.5 — aliyntilanan tweete tiklanmak
+- photo_expand: 2 — resim genisletme
+- vqv: 2 — video quality view (minimum sure esigini gecen izleme)
 - retweet: 1
-- like: 0.5 — tek basina anlamsiz
+- like: 0.5 — tek basina anlamsiz, baska sinyal olmadan hicbir sey ifade etmez
 
 NEGATIF (KACIN):
-- report: -369 — KATASTROFIK
+- report: -369 — KATASTROFIK (like'in 738 kati negatif)
 - not_interested: -74
 - mute_author: -74
 - block_author: -50
 
-### TweetCred System
+### TweetCred (TweepCred) Sistemi
+- Hesap skorlama: 0-100 arasi, PageRank benzeri yaklasim
+- KRITIK ESIK: 65 — bu altinda sadece 3 tweet dagitim icin seciliyor
+- 65 uzerinde: tum tweetler dagitim icin uygun
 - Default baslangic: -128
-- Minimum erisim icin: +17 gerekli
-- Mavi tik: otomatik +100 → -28'den baslar
-- Bio, takip ettiklerin, takip/takipci orani, dil, uslup hepsi etkiler
+- Mavi tik: otomatik +100 → -28'den baslar → daha hizli 65'e cikiyor
+- Etki eden faktorler: hesap yasi, takipci/takip orani, paylasim kalitesi, yuksek kaliteli hesaplarla etkilesim
+- Yeni hesapsa: sabirl ol, TweepCred zamanla yukseliyor
 
 ### Engagement Debt (Cold Start Suppression)
 - Ilk 100 post'ta %0.5'ten dusuk like/impression → skor kalici -50 duser
@@ -108,13 +133,16 @@ Yapilar: em dash, bullet list halinde tweet, "Oncelikle X, ardindan Y, son olara
 8. Crew olustur — birbirinizi boostlayin
 `;
 
+// Toplam ağırlık = 100
+// dwell_potential: P(dwell) Grok'un model outputlarından biri — 2+ dakika okutan içerik +10 puan
 export const SCORING_CRITERIA = {
-  hook: { weight: 25, label: 'Hook Gücü', description: 'İlk cümle scroll durduruyor mu?' },
-  information: { weight: 20, label: 'Bilgi Değeri', description: 'Spesifik insight/stat var mı?' },
-  reply_potential: { weight: 15, label: 'Reply Potansiyeli', description: 'Yorum tetikliyor mu?' },
-  algorithm: { weight: 15, label: 'Algoritma Uyumu', description: 'Kurallara uyuyor mu?' },
-  persona: { weight: 15, label: 'Persona Eşleşmesi', description: 'Seçilen tarzda mı?' },
-  originality: { weight: 10, label: 'Özgünlük', description: 'Taze açı var mı?' },
+  hook:            { weight: 22, label: 'Hook Gücü',         description: 'İlk cümle scroll durduruyor mu? 3 saniye kuralı.' },
+  information:     { weight: 18, label: 'Bilgi Değeri',       description: 'Spesifik insight, stat veya taze bakış açısı var mı?' },
+  reply_potential: { weight: 15, label: 'Reply Potansiyeli',  description: 'Soru veya açık uç var mı? reply_engaged = like\'ın 150 katı.' },
+  dwell_potential: { weight: 10, label: 'Dwell Time',         description: '2+ dakika okutabilir mi? Scroll pass riski nedir?' },
+  algorithm:       { weight: 12, label: 'Algoritma Uyumu',    description: 'Hashtag/emoji yok, AI dili yok, link reply\'da mı?' },
+  persona:         { weight: 12, label: 'Persona Eşleşmesi',  description: 'Seçilen persona tonu ve diline uyuyor mu?' },
+  originality:     { weight: 11, label: 'Özgünlük',           description: 'Taze açı mı? Klişe mi? Bookmark alır mı?' },
 };
 
 export const TIMING_SLOTS = [
