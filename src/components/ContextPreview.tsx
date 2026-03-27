@@ -20,7 +20,7 @@ export function ContextPreview({ prompt }: ContextPreviewProps) {
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.03] transition-colors"
       >
-        <span className="text-xs font-medium text-[#e8e8e0]">Prompt Onizleme</span>
+        <span className="text-xs font-medium text-[#e8e8e0]">Prompt Önizleme</span>
         <span className="text-[#6b6b72] text-xs">{open ? '▲' : '▼'}</span>
       </button>
 

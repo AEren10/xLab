@@ -6,15 +6,10 @@ import { scoreColorSimple as scoreColor } from '../lib/utils';
 import { xquikApi } from '../lib/xquik';
 
 /**
- * History — Kaydedilen tweetler + feedback loop.
+ * History — Kaydedilen tweetler + reply'lar + feedback loop.
  *
- * Feedback loop nasıl çalışır:
- *   1. Generate'te tweet üretip kaydettiğinde impressionType da kaydediliyor.
- *   2. "Atıldı" işaretleyince postedAt set edilir.
- *   3. "X'ten Güncelle" → xquik ile kendi tweetlerin çekilir, text eşleşmesiyle
- *      engagement (like/reply/rt) otomatik doldurulur.
- *   4. Altta "Tip Analizi" paneli: Data/Story/Hot Take vb. için avg engagement karşılaştırması.
- *      Claude bu veriyi prompta ekleyerek "bu hesap için Data çalışıyor" çıkarımı yapıyor.
+ * Filtreler: Tümü / Tweetler / Reply'lar
+ * Reply girişleri: "Yanıt → @handle" bağlamı gösterir
  */
 
 const TYPE_COLORS: Record<string, string> = {
@@ -44,19 +39,32 @@ function EngagementInput({
   );
 }
 
+type FilterType = 'all' | 'tweet' | 'reply';
+
 export function History() {
   const settings = db.getSettings();
-  const [tweets, setTweets] = useState<TweetEntry[]>([]);
+  const [allTweets, setAllTweets] = useState<TweetEntry[]>([]);
+  const [filter, setFilter] = useState<FilterType>('all');
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
 
   const analytics = db.getAnalytics();
 
-  useEffect(() => { setTweets(db.getTweets()); }, []);
-  const refresh = () => setTweets(db.getTweets());
+  useEffect(() => { setAllTweets(db.getTweets()); }, []);
+  const refresh = () => setAllTweets(db.getTweets());
+
+  // Filtrelenmiş liste
+  const tweets = allTweets.filter((t) => {
+    if (filter === 'tweet') return !t.entryType || t.entryType === 'tweet';
+    if (filter === 'reply') return t.entryType === 'reply';
+    return true;
+  });
+
+  const tweetCount = allTweets.filter((t) => !t.entryType || t.entryType === 'tweet').length;
+  const replyCount = allTweets.filter((t) => t.entryType === 'reply').length;
 
   const updateEngagement = (id: number, field: keyof TweetEntry['engagement'], value: number) => {
-    const tweet = tweets.find((t) => t.id === id);
+    const tweet = allTweets.find((t) => t.id === id);
     if (!tweet) return;
     db.updateTweet(id, { engagement: { ...tweet.engagement, [field]: value } });
     refresh();
@@ -72,14 +80,6 @@ export function History() {
     refresh();
   };
 
-  /**
-   * X'ten Engagement Güncelle
-   * Mantık:
-   *   1. xquik ile son 100 tweeti çek (from:kullanıcıadı)
-   *   2. Her kaydedilmiş tweet için X tweetleriyle text karşılaştırması yap
-   *      (ilk 60 karakter normalize edilmiş olarak)
-   *   3. Eşleşirse likes/replies/retweets'i güncelle, xSynced=true işaretle
-   */
   const syncFromX = async () => {
     if (!settings.xquikKey || !settings.twitterUsername) {
       setSyncMsg('Settings\'e xquik API key ve Twitter kullanıcı adı ekle.');
@@ -109,7 +109,7 @@ export function History() {
             like: match.likes,
             reply: match.replies,
             rt: match.retweets,
-            quote: saved_tweet.engagement.quote, // quote X API'de ayrı gelmiyor, manuel kalır
+            quote: saved_tweet.engagement.quote,
           },
           xSynced: true,
           postedAt: saved_tweet.postedAt || match.createdAt,
@@ -124,14 +124,14 @@ export function History() {
     setTimeout(() => setSyncMsg(''), 4000);
   };
 
-  // Tip analizi — hangi içerik tipi kaç engagement alıyor
+  // Tip analizi — sadece tweetler için
   const typeStats = Object.entries(analytics.byType)
     .sort((a, b) => b[1].avgEng - a[1].avgEng);
 
   return (
     <div className="p-4 space-y-4 overflow-y-auto h-full max-w-4xl mx-auto">
 
-      {/* ── Üst bar: Analytics + X senkron ────────────────────────────── */}
+      {/* ── Üst bar ── */}
       <div className="flex items-start gap-3">
         <div className="grid grid-cols-3 gap-3 flex-1">
           {[
@@ -146,7 +146,6 @@ export function History() {
           ))}
         </div>
 
-        {/* X senkron butonu */}
         <div className="flex flex-col gap-2 shrink-0">
           <button
             onClick={syncFromX}
@@ -164,8 +163,29 @@ export function History() {
         </div>
       </div>
 
-      {/* ── Tip Analizi ─────────────────────────────────────────────────── */}
-      {typeStats.length > 0 && (
+      {/* ── Filtre sekmeler ── */}
+      <div className="flex items-center gap-1 p-0.5 bg-white/[0.04] rounded-xl w-fit">
+        {([
+          { key: 'all',   label: `Tümü (${allTweets.length})` },
+          { key: 'tweet', label: `Tweet (${tweetCount})` },
+          { key: 'reply', label: `Reply (${replyCount})` },
+        ] as { key: FilterType; label: string }[]).map((f) => (
+          <button
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            className={`text-xs px-4 py-1.5 rounded-lg transition-all font-medium ${
+              filter === f.key
+                ? 'bg-accent text-white shadow-lg shadow-accent/20'
+                : 'text-[#6b6b72] hover:text-[#e8e8e0]'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Tip Analizi (sadece tweet filtresi aktif değilken / hepsi görünürken) ── */}
+      {filter !== 'reply' && typeStats.length > 0 && (
         <div className="bg-card border border-white/[0.07] rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-semibold text-[#e8e8e0]">İçerik Tipi Analizi</p>
@@ -204,64 +224,104 @@ export function History() {
 
       {tweets.length === 0 && (
         <div className="text-center py-16 text-[#6b6b72] text-sm">
-          Henüz kayıtlı tweet yok. Generate'te "Kaydet" butonuna bas.
+          {filter === 'reply'
+            ? 'Arşivlenmiş reply yok. Reply Fırsatları\'nda "Arşivle" butonunu kullan.'
+            : 'Henüz kayıtlı tweet yok. Generate\'te "Kaydet" butonuna bas.'
+          }
         </div>
       )}
 
-      {/* ── Tweet listesi ─────────────────────────────────────────────── */}
+      {/* ── Liste ── */}
       <div className="space-y-3">
         {tweets.map((tweet) => {
+          const isReply = tweet.entryType === 'reply';
           const engScore = tweet.engagement.like + tweet.engagement.reply * 5 + tweet.engagement.rt * 2 + tweet.engagement.quote * 3;
           return (
             <div key={tweet.id} className="bg-card border border-white/[0.07] rounded-xl p-4 space-y-3">
+
+              {/* Reply bağlamı */}
+              {isReply && tweet.replyTo && (
+                <div className="flex items-start gap-2 px-2.5 py-2 bg-white/[0.03] border border-white/[0.05] rounded-lg">
+                  <span className="text-[10px] text-accent/60 shrink-0 mt-0.5">↩ Yanıt →</span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-[10px] font-medium text-accent/80">@{tweet.replyTo.handle}</span>
+                    <p className="text-[10px] text-[#4a4a55] leading-relaxed truncate mt-0.5">
+                      {tweet.replyTo.text}
+                    </p>
+                  </div>
+                  <a
+                    href={`https://x.com/i/web/status/${tweet.replyTo.tweetId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[9px] text-accent/40 hover:text-accent/70 shrink-0 transition-colors"
+                  >
+                    ↗
+                  </a>
+                </div>
+              )}
 
               {/* Header */}
               <div className="flex items-start justify-between gap-2">
                 <p className="text-sm text-[#e8e8e0] leading-relaxed whitespace-pre-wrap flex-1">
                   {tweet.text}
                 </p>
-                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${scoreColor(tweet.score)}`}>
-                  {tweet.score}
-                </span>
+                {tweet.score > 0 && (
+                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full shrink-0 ${scoreColor(tweet.score)}`}>
+                    {tweet.score}
+                  </span>
+                )}
               </div>
 
               {/* Meta */}
               <div className="flex flex-wrap gap-2 text-[11px] text-[#6b6b72]">
+                {isReply && (
+                  <span className="text-[9px] px-2 py-0.5 rounded-full border font-medium text-accent/70 bg-accent/[0.06] border-accent/20">
+                    Reply
+                  </span>
+                )}
                 {tweet.impressionType && (
                   <span className={`text-[9px] px-2 py-0.5 rounded-full border font-medium ${TYPE_COLORS[tweet.impressionType] || TYPE_COLORS['Diğer']}`}>
                     {tweet.impressionType}
                   </span>
                 )}
-                <span>{tweet.persona}</span>
+                {!isReply && <span>{tweet.persona}</span>}
                 <span className="truncate max-w-[120px]">{tweet.topic}</span>
                 <span>{new Date(tweet.createdAt).toLocaleDateString('tr-TR')}</span>
                 {tweet.postedAt && <span className="text-accent-green">Atıldı</span>}
-                {tweet.xSynced && (
-                  <span className="text-accent/70">✓ X verisi</span>
+                {tweet.xSynced && <span className="text-accent/70">✓ X verisi</span>}
+                {tweet.xquikScore !== undefined && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full border font-medium ${
+                    tweet.xquikScore >= 75 ? 'text-accent-green border-accent-green/20 bg-accent-green/10' :
+                    tweet.xquikScore >= 50 ? 'text-accent-yellow border-accent-yellow/20 bg-accent-yellow/10' :
+                    'text-accent-red border-accent-red/20 bg-accent-red/10'
+                  }`}>
+                    Grok {tweet.xquikScore}
+                  </span>
                 )}
               </div>
 
-              {/* Score bars */}
-              <div className="grid grid-cols-3 gap-x-4 gap-y-1.5">
-                {Object.entries(SCORING_CRITERIA).map(([key, crit]) => {
-                  const val = tweet.scores?.[key] ?? 0;
-                  const pct = Math.round((val / crit.weight) * 100);
-                  return (
-                    <div key={key} className="flex items-center gap-1.5">
-                      <span className="text-[10px] text-[#6b6b72] w-20 shrink-0 truncate">{crit.label}</span>
-                      <div className="flex-1 h-1 bg-white/[0.06] rounded-full overflow-hidden">
-                        <div className="h-full bg-accent/60 rounded-full" style={{ width: `${pct}%` }} />
+              {/* Score bars — sadece tweetler için */}
+              {!isReply && tweet.scores && Object.keys(tweet.scores).length > 0 && (
+                <div className="grid grid-cols-3 gap-x-4 gap-y-1.5">
+                  {Object.entries(SCORING_CRITERIA).map(([key, crit]) => {
+                    const val = tweet.scores?.[key] ?? 0;
+                    const pct = Math.round((val / crit.weight) * 100);
+                    return (
+                      <div key={key} className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-[#6b6b72] w-20 shrink-0 truncate">{crit.label}</span>
+                        <div className="flex-1 h-1 bg-white/[0.06] rounded-full overflow-hidden">
+                          <div className="h-full bg-accent/60 rounded-full" style={{ width: `${pct}%` }} />
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
 
-              {/* Engagement — X'ten geldiyse salt okunur göster */}
+              {/* Engagement */}
               <div className="flex items-center gap-3 pt-1 border-t border-white/[0.05]">
                 <span className="text-[11px] text-[#6b6b72]">Engagement:</span>
                 {tweet.xSynced ? (
-                  // X'ten çekildiyse rakamları düz göster, manuel girişe gerek yok
                   <div className="flex gap-4 text-[11px]">
                     {(['like', 'reply', 'rt'] as const).map(f => (
                       <span key={f} className="text-[#8b8b96]">

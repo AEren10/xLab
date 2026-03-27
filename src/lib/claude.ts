@@ -14,14 +14,32 @@ export interface TweetVariation {
 
 export interface ThreadTweet {
   text: string;
-  position: number; // 1'den başlar
-  type: 'hook' | 'content' | 'cta'; // hook = ilk, cta = son
+  position: number;
+  type: 'hook' | 'content' | 'cta';
 }
 
 export interface TweetThread {
   tweets: ThreadTweet[];
   total_score: number;
   score_reason: string;
+}
+
+const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
+
+const baseHeaders = (apiKey: string) => ({
+  'Content-Type': 'application/json',
+  'x-api-key': apiKey,
+  'anthropic-version': '2023-06-01',
+  'anthropic-dangerous-direct-browser-access': 'true',
+});
+
+function safeParseJSON<T>(raw: string, _fallback: T): T {
+  const clean = raw.replace(/```json|```/g, '').trim();
+  try {
+    return JSON.parse(clean) as T;
+  } catch {
+    throw new Error('Claude yanıtı işlenemedi. Tekrar dene.');
+  }
 }
 
 export const claudeApi = {
@@ -31,24 +49,17 @@ export const claudeApi = {
     userMessage: string,
     variations = 3
   ): Promise<TweetVariation[]> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(CLAUDE_API, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 1500,
         system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: `${userMessage}\n\nGenerate ${variations} tweet variations. Return ONLY a JSON array, no markdown.`,
-          },
-        ],
+        messages: [{
+          role: 'user',
+          content: `${userMessage}\n\nGenerate ${variations} tweet variations. Return ONLY a JSON array, no markdown.`,
+        }],
       }),
     });
 
@@ -59,8 +70,7 @@ export const claudeApi = {
 
     const data = await res.json();
     const text = data.content?.[0]?.text || '[]';
-    const clean = text.replace(/```json|```/g, '').trim();
-    return JSON.parse(clean);
+    return safeParseJSON<TweetVariation[]>(text, []);
   },
 
   async generateThread(
@@ -68,24 +78,14 @@ export const claudeApi = {
     systemPrompt: string,
     userMessage: string
   ): Promise<TweetThread | null> {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const res = await fetch(CLAUDE_API, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true',
-      },
+      headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
         max_tokens: 2000,
         system: systemPrompt,
-        messages: [
-          {
-            role: 'user',
-            content: userMessage,
-          },
-        ],
+        messages: [{ role: 'user', content: userMessage }],
       }),
     });
 
@@ -96,7 +96,73 @@ export const claudeApi = {
 
     const data = await res.json();
     const text = data.content?.[0]?.text || 'null';
-    const clean = text.replace(/```json|```/g, '').trim();
-    return JSON.parse(clean);
+    return safeParseJSON<TweetThread | null>(text, null);
+  },
+
+  /**
+   * Tweet metninden Midjourney / DALL-E için görsel prompt üretir.
+   * ~150 token kullanır. Kullanıcı açıkça butona basınca çağrılır.
+   */
+  async generateVisualPrompt(
+    apiKey: string,
+    tweetText: string,
+    impressionType = 'general'
+  ): Promise<string> {
+    const styleGuide: Record<string, string> = {
+      'Data':     'clean infographic style, data visualization, minimal charts, white background, professional',
+      'Story':    'authentic documentary photography, candid moment, natural light, warm tones',
+      'Hot Take': 'bold typographic poster, high contrast, strong color, editorial design',
+      'Edu':      'clean educational diagram, step-by-step visual, pastel colors, modern flat illustration',
+      'Inspire':  'minimalist quote card, elegant typography, soft gradient background, single focal point',
+      'Humor':    'playful illustration, vibrant colors, meme-adjacent but polished, fun composition',
+    };
+    const style = styleGuide[impressionType] || 'clean minimal social media visual, dark background, professional';
+
+    const res = await fetch(CLAUDE_API, {
+      method: 'POST',
+      headers: baseHeaders(apiKey),
+      body: JSON.stringify({
+        model: 'claude-haiku-4-20250514',
+        max_tokens: 200,
+        messages: [{
+          role: 'user',
+          content: `Tweet: "${tweetText.slice(0, 250)}"
+Content type: ${impressionType}
+Style reference: ${style}
+
+Write a concise Midjourney/DALL-E image prompt (max 60 words) for a Twitter post visual that matches this tweet's tone and topic. 1:1 square format. Return ONLY the prompt text, no explanation.`,
+        }],
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `API error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    return (data.content?.[0]?.text || '').trim();
+  },
+
+  /**
+   * API key geçerliliğini test et — minimal token kullanır.
+   */
+  async testKey(apiKey: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(CLAUDE_API, {
+        method: 'POST',
+        headers: baseHeaders(apiKey),
+        body: JSON.stringify({
+          model: 'claude-haiku-4-20250514',
+          max_tokens: 5,
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
+      if (res.ok) return { ok: true };
+      const err = await res.json().catch(() => ({}));
+      return { ok: false, error: err?.error?.message || `HTTP ${res.status}` };
+    } catch (e: any) {
+      return { ok: false, error: e.message };
+    }
   },
 };

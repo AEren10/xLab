@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { TweetCard } from '../components/TweetCard';
 import { RadarPanel } from '../components/RadarPanel';
 import { ContextPreview } from '../components/ContextPreview';
 import { Tooltip } from '../components/Tooltip';
 import { db } from '../lib/db';
+import type { AccountProfile } from '../lib/db';
 import { xquikApi } from '../lib/xquik';
-import type { RadarItem, ComposeAlgoData, UserTweet } from '../lib/xquik';
+import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult } from '../lib/xquik';
 import { claudeApi } from '../lib/claude';
 import type { TweetVariation, TweetThread } from '../lib/claude';
 import {
@@ -32,9 +33,9 @@ const LENGTHS = [
 ];
 
 const GOALS = [
-  { id: 'Engagement', label: 'Engagement', tip: 'Reply ve bookmark çek. En güçlü büyüme sinyali.' },
-  { id: 'Followers',  label: 'Followers',  tip: 'Değer ver, follow bıraktır. Yeni hesap için öncelikli.' },
-  { id: 'Authority',  label: 'Authority',  tip: 'Bilgi + güven inşa et. Uzun vadede en karlı.' },
+  { id: 'Engagement', label: 'Etkileşim', tip: 'Reply ve bookmark çek. En güçlü büyüme sinyali.' },
+  { id: 'Followers',  label: 'Takipçi',   tip: 'Değer ver, follow bıraktır. Yeni hesap için öncelikli.' },
+  { id: 'Authority',  label: 'Otorite',   tip: 'Bilgi + güven inşa et. Uzun vadede en karlı.' },
 ];
 
 const VARIATIONS_OPTS = [1, 2, 3];
@@ -263,11 +264,11 @@ function AccountHealth({ settings, userTweets }: { settings: any; userTweets: Us
             </div>
           ) : !settings.twitterUsername ? (
             <p className="text-[10px] text-[#6b6b72] leading-relaxed">
-              Settings'e Twitter kullanıcı adını ekle → gerçek performans verisi buraya çekilir.
+              Ayarlar'a Twitter kullanıcı adını ekle → gerçek performans verisi buraya çekilir.
             </p>
           ) : !settings.xquikKey ? (
             <p className="text-[10px] text-[#6b6b72] leading-relaxed">
-              xquik API key gerekli → Settings'te ekle.
+              xquik API key gerekli → Ayarlar'dan ekle.
             </p>
           ) : (
             <p className="text-[10px] text-[#4a4a55]">Tweetler yükleniyor...</p>
@@ -314,7 +315,7 @@ function EmptyState({ algoData }: { algoData: any }) {
       </div>
 
       {ALGO_TIPS.map((tip) => (
-        <div key={tip.title} className={`rounded-xl border p-3.5 ${tip.color}`}>
+        <div key={tip.title} className={`rounded-xl border p-3.5 hover:border-accent/20 hover:bg-white/[0.04] cursor-default transition-all duration-200 ${tip.color}`}>
           <div className="flex items-start gap-3">
             <span className="text-base shrink-0 mt-0.5">{tip.icon}</span>
             <div>
@@ -388,14 +389,19 @@ function EmptyState({ algoData }: { algoData: any }) {
 
 function SkeletonCard() {
   return (
-    <div className="bg-card border border-white/[0.07] rounded-xl p-4 space-y-3 animate-pulse">
-      <div className="h-3.5 bg-white/[0.05] rounded-lg w-full" />
-      <div className="h-3.5 bg-white/[0.05] rounded-lg w-4/5" />
-      <div className="h-3.5 bg-white/[0.05] rounded-lg w-3/5" />
+    <div className="bg-card border border-white/[0.07] rounded-xl p-4 space-y-3 overflow-hidden">
+      <div className="h-4 animate-shimmer rounded-lg w-full" />
+      <div className="h-4 animate-shimmer rounded-lg w-4/5" />
+      <div className="h-4 animate-shimmer rounded-lg w-3/5" />
       <div className="flex gap-2 mt-3">
         {[...Array(5)].map((_, i) => (
-          <div key={i} className="h-1 flex-1 bg-white/[0.05] rounded-full" />
+          <div key={i} className="h-1.5 flex-1 animate-shimmer rounded-full" />
         ))}
+      </div>
+      <div className="flex gap-2">
+        <div className="h-8 flex-1 animate-shimmer rounded-lg" />
+        <div className="h-8 flex-1 animate-shimmer rounded-lg" />
+        <div className="h-8 w-12 animate-shimmer rounded-lg" />
       </div>
     </div>
   );
@@ -409,13 +415,24 @@ function SkeletonCard() {
  */
 export function Generate() {
   const settings = db.getSettings();
+
+  // Aktif profil — profil seçilmişse onun ayarlarını kullan
+  const [profiles] = useState<AccountProfile[]>(db.getProfiles());
+  const [activeProfileId, setActiveProfileId] = useState<string>(settings.activeProfileId || '');
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
+
+  // Aktif profilden veya legacy settings'ten ayarları al
+  const effectiveSettings = activeProfile
+    ? { ...settings, niche: activeProfile.niche, defaultPersona: activeProfile.defaultPersona, toneProfile: activeProfile.toneProfile, twitterUsername: activeProfile.twitterUsername, hasPremium: activeProfile.hasPremium }
+    : settings;
+
   const [topic, setTopic] = useState('');
   const [impressionType, setImpressionType] = useState('Data');
   const [length, setLength] = useState('standard');
   const [goal, setGoal] = useState('Engagement');
   const [variations, setVariations] = useState(3);
   const [persona, setPersona] = useState<any>(null);
-  const [personaId, setPersonaId] = useState(settings.defaultPersona || 'hurricane');
+  const [personaId, setPersonaId] = useState(effectiveSettings.defaultPersona || 'hurricane');
   const personaList = ['hurricane', 'tr_educational', 'tr_controversial', 'tr_casual'];
   const [radarItems, setRadarItems] = useState<RadarItem[]>([]);
   const [algoData, setAlgoData] = useState<ComposeAlgoData | null>(null);
@@ -427,6 +444,10 @@ export function Generate() {
   const [error, setError] = useState('');
   const [copyPrompt, setCopyPrompt] = useState('');
   const [promptCopied, setPromptCopied] = useState(false);
+  // Viral tweetler — konuya göre xquik'ten çekilen örnek tweetler
+  const [viralTweets, setViralTweets] = useState<TweetSearchResult[]>([]);
+  const [viralLoading, setViralLoading] = useState(false);
+  const viralDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetch(`/personas/${personaId}.json`)
@@ -438,62 +459,86 @@ export function Generate() {
   useEffect(() => {
     if (settings.xquikKey) {
       xquikApi.getRadar(settings.xquikKey, 8).then(setRadarItems).catch(() => {});
-      xquikApi.getAlgoData(settings.xquikKey, 'general').then(setAlgoData).catch(() => {});
-      // Feedback loop: kullanıcının kendi tweetlerini çek → recentPerf gerçek data ile dolsun
-      if (settings.twitterUsername) {
-        xquikApi.getUserTweets(settings.xquikKey, settings.twitterUsername, 20)
+      xquikApi.getAlgoData(settings.xquikKey, effectiveSettings.niche || 'general').then(setAlgoData).catch(() => {});
+      if (effectiveSettings.twitterUsername) {
+        xquikApi.getUserTweets(settings.xquikKey, effectiveSettings.twitterUsername, 20)
           .then(setUserTweets)
           .catch(() => {});
       }
     }
-  }, []);
+  }, [activeProfileId]);
+
+  // Profil değişince personaId sıfırla
+  useEffect(() => {
+    setPersonaId(effectiveSettings.defaultPersona || 'hurricane');
+  }, [activeProfileId]);
+
+  // Viral tweet fetch — topic değişince debounce ile tetikle
+  useEffect(() => {
+    if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current);
+    if (!topic.trim() || topic.length < 5 || !settings.xquikKey) {
+      setViralTweets([]);
+      return;
+    }
+    setViralLoading(true);
+    viralDebounceRef.current = setTimeout(async () => {
+      const results = await xquikApi.searchTweets(settings.xquikKey, topic, {
+        minFaves: 50,
+        lang: 'tr',
+        hours: 48,
+        limit: 4,
+      });
+      setViralTweets(results);
+      setViralLoading(false);
+    }, 1200);
+    return () => { if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current); };
+  }, [topic, settings.xquikKey]);
 
   useEffect(() => {
     if (!persona) return;
-    const sys = buildSystemPrompt(persona, settings, algoData);
+    const sys = buildSystemPrompt(persona, effectiveSettings, algoData);
     const user = buildUserMessage({
       topic: topic || '(konu girilmedi)',
-      persona, settings,
+      persona, settings: effectiveSettings,
       recentTweets: db.getTweets(),
       xUserTweets: userTweets,
       radarItems, impressionType, length, goal, variations,
     });
-    // Copy-paste modu için kısa prompt (claude.ai'da kesilme sorunu)
-    setCopyPrompt(buildCopyPrompt(sys, user, persona, settings, algoData));
-  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets]);
+    setCopyPrompt(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData));
+  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets, activeProfileId]);
 
   const handleGenerate = useCallback(async () => {
     if (!topic.trim()) return;
     setLoading(true); setError(''); setResults([]); setThread(null);
 
-    const sys = buildSystemPrompt(persona, settings, algoData);
+    const sys = buildSystemPrompt(persona, effectiveSettings, algoData);
 
     if (mode === 'thread') {
-      const user = buildThreadMessage({ topic, persona, settings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
+      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
       if (settings.claudeKey) {
         try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
       } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, settings, algoData)).catch(() => {});
+        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData)).catch(() => {});
         setError("Claude API key yok. Thread prompt panoya kopyalandı — claude.ai'a yapıştır.");
       }
     } else {
-      const user = buildUserMessage({ topic, persona, settings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
+      const user = buildUserMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
       if (settings.claudeKey) {
         try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
         catch (e: any) { setError(e.message || 'Claude API hatası.'); }
       } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, settings, algoData)).catch(() => {});
+        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData)).catch(() => {});
         setError("Claude API key yok. Prompt panoya kopyalandı — claude.ai'a yapıştır.");
       }
     }
     setLoading(false);
-  }, [topic, persona, settings, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets]);
+  }, [topic, persona, effectiveSettings, settings.claudeKey, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets]);
 
   const handleSaveTweet = (tweet: TweetVariation) => {
     db.saveTweet({
       text: tweet.text, topic, persona: personaId,
-      impressionType, // hangi tipte üretildiğini kaydet — feedback loop için
+      impressionType,
       score: tweet.total_score, scores: tweet.scores, scoreReason: tweet.score_reason,
       engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
     });
@@ -503,23 +548,112 @@ export function Generate() {
   return (
     <div className="flex h-full">
       {/* ── Sol panel ─────────────────────────────────────────────── */}
-      <div className="w-[300px] shrink-0 border-r border-white/[0.06] p-4 space-y-4 overflow-y-auto bg-[#0d0d0f]">
+      <div className="w-[310px] shrink-0 border-r border-white/[0.06] p-4 space-y-4 overflow-y-auto bg-[#0c0c0f]">
+
+        {/* Hesap Profili Seçici */}
+        {profiles.length > 0 && (
+          <div>
+            <label className="text-[10px] font-semibold text-[#4a4a55] uppercase tracking-wider mb-1.5 block">
+              Hesap
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                onClick={() => { setActiveProfileId(''); db.saveSettings({ activeProfileId: '' }); }}
+                className={`text-[10px] px-2.5 py-1 rounded-lg transition-all font-medium ${
+                  !activeProfileId
+                    ? 'bg-accent/15 text-accent border border-accent/30'
+                    : 'bg-white/[0.04] text-[#6b6b72] border border-white/[0.07] hover:text-[#e8e8e0]'
+                }`}
+              >
+                Varsayılan
+              </button>
+              {profiles.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => { setActiveProfileId(p.id); db.saveSettings({ activeProfileId: p.id }); }}
+                  className={`text-[10px] px-2.5 py-1 rounded-lg transition-all font-medium ${
+                    activeProfileId === p.id
+                      ? 'bg-accent/15 text-accent border border-accent/30'
+                      : 'bg-white/[0.04] text-[#6b6b72] border border-white/[0.07] hover:text-[#e8e8e0]'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            {activeProfile && (
+              <p className="text-[10px] text-[#4a4a55] mt-1">
+                @{activeProfile.twitterUsername || '—'} · {activeProfile.niche || 'niche yok'}
+              </p>
+            )}
+          </div>
+        )}
 
         {/* Konu */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block">Konu</label>
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block">Konu</label>
           <textarea
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
             placeholder="Ne hakkında tweet atacaksın?"
-            rows={3}
-            className="w-full bg-[#111113] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#e8e8e0] placeholder-[#4a4a55] resize-none focus:border-accent/40 focus:bg-[#111115] transition-all"
+            rows={4}
+            className="w-full bg-[#111113] border border-white/[0.1] rounded-xl px-3 py-2.5 text-base text-[#e8e8e0] placeholder-[#5a5a6a] resize-none focus:border-accent/40 focus:bg-[#111115] transition-all"
           />
+        </div>
+
+        {/* ── Bölüm ayracı: İçerik → Format ──── */}
+
+        {/* Viral Tweetler — konuya göre xquik'ten çekilen örnekler */}
+        {(viralLoading || viralTweets.length > 0) && (
+          <div className="rounded-xl border border-white/[0.07] overflow-hidden">
+            <div className="px-3.5 py-2.5 flex items-center justify-between border-b border-white/[0.05]">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-medium text-[#8b8b96]">Konuyu Tutan Tweetler</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                  xquik
+                </span>
+              </div>
+              {viralLoading && (
+                <span className="w-3 h-3 border border-accent/30 border-t-accent rounded-full animate-spin shrink-0" />
+              )}
+            </div>
+            {viralTweets.length > 0 && (
+              <div className="divide-y divide-white/[0.04]">
+                {viralTweets.map((vt) => (
+                  <div key={vt.id} className="px-3.5 py-2.5 space-y-1 hover:bg-white/[0.02] transition-colors group">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-medium text-[#8b8b96]">@{vt.authorHandle}</span>
+                      <span className="text-[9px] text-[#4a4a55]">
+                        ❤ {vt.likes >= 1000 ? `${(vt.likes/1000).toFixed(1)}k` : vt.likes}
+                        {vt.replies > 0 && ` · 💬 ${vt.replies}`}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[#6b6b72] leading-relaxed line-clamp-2 group-hover:text-[#8b8b96] transition-colors">
+                      {vt.text}
+                    </p>
+                    <button
+                      onClick={() => setTopic(vt.text.slice(0, 200))}
+                      className="text-[9px] text-accent/50 hover:text-accent transition-colors"
+                    >
+                      Konuya ekle →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── FORMAT bölümü ─── */}
+        <div className="flex items-center gap-2 pt-1">
+          <div className="h-px flex-1 bg-white/[0.05]" />
+          <span className="text-[9px] font-bold text-[#3a3a48] uppercase tracking-widest">Format</span>
+          <div className="h-px flex-1 bg-white/[0.05]" />
         </div>
 
         {/* Mod */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
             Mod
             <Tooltip text="Tek Tweet: en yüksek skorlu varyasyonu seç. Thread 🧵: Hook→İçerik→CTA zinciri, dwell time 3x artırır." />
           </label>
@@ -545,7 +679,7 @@ export function Generate() {
 
         {/* Tip */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
             Tip
             <Tooltip text="İçerik formatı. Data ve Edu bookmark alır. Hot Take reply patlatır ama negatif sinyal riski var. Story dwell time artırır." />
           </label>
@@ -572,7 +706,7 @@ export function Generate() {
 
         {/* Uzunluk */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
             Uzunluk
             <Tooltip text="Kısa: tek güçlü cümle. Standart: Grok'un favori alanı. Uzun: dwell time +10 puan ama Premium gerekir." />
           </label>
@@ -594,9 +728,16 @@ export function Generate() {
           </div>
         </div>
 
+        {/* ── STRATEJİ bölümü ─── */}
+        <div className="flex items-center gap-2 pt-1">
+          <div className="h-px flex-1 bg-white/[0.05]" />
+          <span className="text-[9px] font-bold text-[#3a3a48] uppercase tracking-widest">Strateji</span>
+          <div className="h-px flex-1 bg-white/[0.05]" />
+        </div>
+
         {/* Hedef */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
             Hedef
             <Tooltip text="Engagement: reply/bookmark çek. Followers: değer ver, follow bıraktır. Authority: uzun vadeli güven inşa et." />
           </label>
@@ -621,7 +762,7 @@ export function Generate() {
         {/* Varyasyon */}
         {mode === 'tweet' && (
           <div>
-            <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+            <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
               Varyasyon
               <Tooltip text="3 üret, en yüksek skorluyu at. Sistem geçmiş engagement'larından öğreniyor — zamanla daha iyi önerir." />
             </label>
@@ -645,7 +786,7 @@ export function Generate() {
 
         {/* Persona */}
         <div>
-          <label className="text-xs font-medium text-[#8b8b96] mb-1.5 block flex items-center">
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
             Persona
             <Tooltip text="Her persona farklı ton ve dil kullanır. Hurricane: bold+soru. Edu: öğretici. Controversial: tartışma açan. Casual: sohbet." />
           </label>
@@ -663,6 +804,13 @@ export function Generate() {
           )}
         </div>
 
+        {/* ── KAYNAKLAR bölümü ─── */}
+        <div className="flex items-center gap-2 pt-1">
+          <div className="h-px flex-1 bg-white/[0.05]" />
+          <span className="text-[9px] font-bold text-[#3a3a48] uppercase tracking-widest">Kaynaklar</span>
+          <div className="h-px flex-1 bg-white/[0.05]" />
+        </div>
+
         {/* Radar */}
         <RadarPanel apiKey={settings.xquikKey} onSelect={(t) => setTopic(t)} />
 
@@ -670,13 +818,13 @@ export function Generate() {
         <ContextPreview prompt={copyPrompt} />
 
         {/* Hesap Durumu + Feedback Loop */}
-        <AccountHealth settings={settings} userTweets={userTweets} />
+        <AccountHealth settings={effectiveSettings} userTweets={userTweets} />
 
         {/* Algo kaynak badge */}
-        <div className="flex items-center gap-2 px-1">
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${algoData ? 'bg-accent-green' : 'bg-[#6b6b72]'}`} />
-          <span className="text-[10px] text-[#6b6b72]">
-            {algoData ? 'Grok canlı veri yüklendi' : 'Statik fallback (skill.ts)'}
+        <div className="flex items-center gap-1.5 px-1">
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${algoData ? 'bg-accent-green' : 'bg-[#3a3a45]'}`} />
+          <span className="text-[10px] text-[#4a4a55]">
+            {algoData ? 'Grok canlı veri aktif' : 'Statik veri (skill.ts)'}
           </span>
         </div>
 
@@ -685,7 +833,7 @@ export function Generate() {
           <button
             onClick={handleGenerate}
             disabled={!topic.trim() || loading}
-            className="w-full py-2.5 rounded-xl bg-accent hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-semibold transition-all shadow-lg shadow-accent/20 hover:shadow-accent/30"
+            className="w-full py-2.5 rounded-xl bg-accent hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-semibold transition-all shadow-lg shadow-accent/20 hover:shadow-xl hover:shadow-accent/30 active:scale-[0.98]"
           >
             {loading ? (
               <span className="flex items-center justify-center gap-2">
@@ -753,8 +901,11 @@ export function Generate() {
                 tweet={tweet}
                 onSave={handleSaveTweet}
                 maxLength={length === 'extended' ? 500 : 280}
-                hasPremium={settings.hasPremium}
+                hasPremium={effectiveSettings.hasPremium}
                 xquikKey={settings.xquikKey}
+                twitterUsername={effectiveSettings.twitterUsername}
+                claudeKey={settings.claudeKey}
+                impressionType={impressionType}
               />
             ))}
           </div>

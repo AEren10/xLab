@@ -70,6 +70,57 @@ export interface UserTweet {
   createdAt: string;
 }
 
+// ─── Trends ──────────────────────────────────────────────────────────────────
+
+export interface TrendItem {
+  name: string;
+  rank?: number;
+  description?: string;
+  query?: string;
+}
+
+// ─── User Profile ─────────────────────────────────────────────────────────────
+
+export interface UserProfile {
+  id: string;
+  username: string;
+  name: string;
+  followers?: number;
+  following?: number;
+  verified?: boolean;
+  description?: string;
+  profileImageUrl?: string;
+}
+
+// ─── Monitor ─────────────────────────────────────────────────────────────────
+
+export interface Monitor {
+  id: string;
+  xUsername: string;
+  eventTypes: string[];
+  isActive: boolean;
+  createdAt: string;
+}
+
+// ─── Style Performance ───────────────────────────────────────────────────────
+
+export interface StylePerformanceTweet {
+  id: string;
+  text: string;
+  likeCount: number;
+  retweetCount: number;
+  replyCount: number;
+  viewCount?: number;
+  bookmarkCount?: number;
+  createdAt?: string;
+}
+
+export interface StylePerformance {
+  xUsername: string;
+  tweetCount: number;
+  tweets: StylePerformanceTweet[];
+}
+
 // ─── Score sonucu ────────────────────────────────────────────────────────────
 
 export interface ChecklistItem {
@@ -209,6 +260,194 @@ export const xquikApi = {
       }));
     } catch {
       return [];
+    }
+  },
+
+  // ── Trending Topics ──────────────────────────────────────────────────────────
+  async getTrends(apiKey: string, count = 20): Promise<TrendItem[]> {
+    if (!apiKey) return [];
+    try {
+      const res = await fetch(`${BASE}/x/trends?count=${count}`, {
+        headers: headers(apiKey),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.trends || []).map((t: any) => ({
+        name: t.name || '',
+        rank: t.rank,
+        description: t.description,
+        query: t.query,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  // ── User Profile ──────────────────────────────────────────────────────────────
+  async getUserProfile(apiKey: string, username: string): Promise<UserProfile | null> {
+    if (!apiKey || !username) return null;
+    try {
+      const clean = username.replace(/^@/, '');
+      const res = await fetch(`${BASE}/x/users/${clean}`, {
+        headers: headers(apiKey),
+      });
+      if (!res.ok) return null;
+      const d = await res.json();
+      return {
+        id: d.id || '',
+        username: d.username || clean,
+        name: d.name || '',
+        followers: d.followers ?? d.followersCount,
+        following: d.following ?? d.followingCount,
+        verified: d.verified,
+        description: d.description,
+        profileImageUrl: d.profileImageUrl,
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  // ── Home Timeline ─────────────────────────────────────────────────────────────
+  async getTimeline(apiKey: string, cursor?: string): Promise<TweetSearchResult[]> {
+    if (!apiKey) return [];
+    try {
+      const url = cursor
+        ? `${BASE}/x/timeline?cursor=${encodeURIComponent(cursor)}`
+        : `${BASE}/x/timeline`;
+      const res = await fetch(url, { headers: headers(apiKey) });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.tweets || []).map((t: any) => ({
+        id: t.id || '',
+        text: t.text || '',
+        author: t.author?.name || t.authorName || '',
+        authorHandle: t.author?.username || t.author?.handle || '',
+        likes: t.likeCount || t.likes || 0,
+        replies: t.replyCount || t.replies || 0,
+        retweets: t.retweetCount || t.retweets || 0,
+        views: t.viewCount || t.views,
+        createdAt: t.createdAt || '',
+        url: t.url || `https://x.com/i/web/status/${t.id}`,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  // ── Style Performance ─────────────────────────────────────────────────────────
+  async getStylePerformance(apiKey: string, username: string): Promise<StylePerformance | null> {
+    if (!apiKey || !username) return null;
+    try {
+      const clean = username.replace(/^@/, '');
+      const res = await fetch(`${BASE}/styles/${clean}/performance`, {
+        headers: headers(apiKey),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return {
+        xUsername: data.xUsername || clean,
+        tweetCount: data.tweetCount || 0,
+        tweets: (data.tweets || []).map((t: any) => ({
+          id: t.id || '',
+          text: t.text || '',
+          likeCount: t.likeCount || t.likes || 0,
+          retweetCount: t.retweetCount || t.retweets || 0,
+          replyCount: t.replyCount || t.replies || 0,
+          viewCount: t.viewCount || t.views,
+          bookmarkCount: t.bookmarkCount,
+          createdAt: t.createdAt,
+        })),
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  // ── Monitors ──────────────────────────────────────────────────────────────────
+  async getMonitors(apiKey: string): Promise<Monitor[]> {
+    if (!apiKey) return [];
+    try {
+      const res = await fetch(`${BASE}/monitors`, { headers: headers(apiKey) });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.monitors || []).map((m: any) => ({
+        id: m.id || '',
+        xUsername: m.xUsername || m.username || '',
+        eventTypes: m.eventTypes || [],
+        isActive: m.isActive ?? true,
+        createdAt: m.createdAt || '',
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  async createMonitor(apiKey: string, username: string, eventTypes: string[]): Promise<Monitor | null> {
+    if (!apiKey || !username) return null;
+    try {
+      const res = await fetch(`${BASE}/monitors`, {
+        method: 'POST',
+        headers: headers(apiKey),
+        body: JSON.stringify({ username: username.replace(/^@/, ''), eventTypes }),
+      });
+      if (!res.ok) return null;
+      const m = await res.json();
+      return {
+        id: m.id || '',
+        xUsername: m.xUsername || m.username || username,
+        eventTypes: m.eventTypes || eventTypes,
+        isActive: m.isActive ?? true,
+        createdAt: m.createdAt || new Date().toISOString(),
+      };
+    } catch {
+      return null;
+    }
+  },
+
+  async deleteMonitor(apiKey: string, id: string): Promise<boolean> {
+    if (!apiKey || !id) return false;
+    try {
+      const res = await fetch(`${BASE}/monitors/${id}`, {
+        method: 'DELETE',
+        headers: headers(apiKey),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  // ── Direkt Tweet At ──────────────────────────────────────────────────────────
+  async postTweet(apiKey: string, account: string, text: string, replyToId?: string): Promise<{ tweetId: string } | null> {
+    if (!apiKey || !account || !text) return null;
+    try {
+      const body: Record<string, string> = {
+        account: account.startsWith('@') ? account : `@${account}`,
+        text,
+      };
+      if (replyToId) body.reply_to_tweet_id = replyToId;
+      const res = await fetch(`${BASE}/x/tweets`, {
+        method: 'POST',
+        headers: headers(apiKey),
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return { tweetId: data.tweetId || '' };
+    } catch {
+      return null;
+    }
+  },
+
+  // ── API Key Test ─────────────────────────────────────────────────────────────
+  async testKey(apiKey: string): Promise<boolean> {
+    if (!apiKey) return false;
+    try {
+      const res = await fetch(`${BASE}/radar?limit=1`, { headers: headers(apiKey) });
+      return res.ok;
+    } catch {
+      return false;
     }
   },
 

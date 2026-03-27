@@ -1,10 +1,14 @@
 /**
- * Reply Fırsatları — TODO Item 3
+ * Reply Fırsatları
  *
  * Mantık: Büyük hesaplara kaliteli reply atmak = juice transfer (trustscore aktarımı).
- * Bu sayfa xquik search ile nişe göre son 2 saatte atılmış, yüksek engagement'lı
+ * xquik search ile nişe göre son 2 saatte atılmış, yüksek engagement'lı
  * tweetleri bulur. Her tweet için "Reply Üret" butonu var; Claude API veya copy-paste
  * modunda reply prompt'u hazırlar.
+ *
+ * Yeni özellikler:
+ *   - Üretilen reply'a xquik Grok checklist skoru uygulanır
+ *   - "Arşivle" butonu ile reply History'ye kaydedilir
  */
 
 import { useState, useCallback } from 'react';
@@ -25,12 +29,24 @@ function timeAgo(dateStr: string): string {
   return `${Math.round(diff / 60)}sa önce`;
 }
 
+// Grok skor rengini döndür
+function scoreColor(score: number): string {
+  if (score >= 75) return 'text-accent-green bg-accent-green/10 border-accent-green/30';
+  if (score >= 50) return 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30';
+  return 'text-accent-red bg-accent-red/10 border-accent-red/30';
+}
+
 interface ReplyResult {
   tweetId: string;
   text: string;
   loading: boolean;
   result: string;
   copied: boolean;
+  archived: boolean;
+  // Grok skor
+  scoring: boolean;
+  xquikScore?: number;
+  topSuggestion?: string;
 }
 
 export function Replies() {
@@ -45,7 +61,6 @@ export function Replies() {
   const [searchErr, setSearchErr] = useState('');
   const [priorityAccounts, setPriorityAccounts] = useState('');
 
-  // Her tweet için ayrı reply üretim state'i
   const [replies, setReplies] = useState<Record<string, ReplyResult>>({});
 
   const handleSearch = useCallback(async () => {
@@ -54,7 +69,6 @@ export function Replies() {
     setSearchErr('');
     setTweets([]);
 
-    // Priority accounts eklenmişse query'ye OR olarak ekle
     const accounts = priorityAccounts
       .split(/[,\s]+/)
       .map((a) => a.replace('@', '').trim())
@@ -82,10 +96,9 @@ export function Replies() {
     async (tweet: TweetSearchResult) => {
       setReplies((prev) => ({
         ...prev,
-        [tweet.id]: { tweetId: tweet.id, text: '', loading: true, result: '', copied: false },
+        [tweet.id]: { tweetId: tweet.id, text: '', loading: true, result: '', copied: false, archived: false, scoring: false },
       }));
 
-      // Reply prompt — kısa, değer ekleyen, soru ile biten
       const replyPrompt = `Sen deneyimli bir Twitter kullanıcısısın. Aşağıdaki tweete güçlü bir reply yaz.
 
 KURAL:
@@ -106,7 +119,6 @@ Sadece reply metnini döndür, açıklama yapma.`;
 
       if (settings.claudeKey) {
         try {
-          // Basit tek mesaj çağrısı — tweet üretiminden farklı format
           const tweets = await claudeApi.generateTweets(
             settings.claudeKey,
             'Sen kısa, güçlü reply yazan bir Twitter uzmanısın.',
@@ -120,31 +132,61 @@ Sadece reply metnini döndür, açıklama yapma.`;
       }
 
       if (!result) {
-        // Copy-paste mod — panoya kopyala
         await navigator.clipboard.writeText(replyPrompt).catch(() => {});
         result = '(API key yok — prompt panoya kopyalandı, claude.ai\'a yapıştır)';
       }
 
       setReplies((prev) => ({
         ...prev,
-        [tweet.id]: { tweetId: tweet.id, text: result, loading: false, result, copied: false },
+        [tweet.id]: { tweetId: tweet.id, text: result, loading: false, result, copied: false, archived: false, scoring: false },
       }));
+
+      // Gerçek reply üretildiyse otomatik skor al
+      if (result && !result.startsWith('(') && settings.xquikKey) {
+        setReplies((prev) => ({ ...prev, [tweet.id]: { ...prev[tweet.id], scoring: true } }));
+        const score = await xquikApi.scoreTweet(settings.xquikKey, result);
+        setReplies((prev) => ({
+          ...prev,
+          [tweet.id]: {
+            ...prev[tweet.id],
+            scoring: false,
+            xquikScore: score?.total ?? undefined,
+            topSuggestion: score?.topSuggestion || undefined,
+          },
+        }));
+      }
     },
     [settings]
   );
 
   const handleCopyReply = async (tweetId: string, text: string) => {
     await navigator.clipboard.writeText(text).catch(() => {});
-    setReplies((prev) => ({
-      ...prev,
-      [tweetId]: { ...prev[tweetId], copied: true },
-    }));
+    setReplies((prev) => ({ ...prev, [tweetId]: { ...prev[tweetId], copied: true } }));
     setTimeout(() => {
-      setReplies((prev) => ({
-        ...prev,
-        [tweetId]: { ...prev[tweetId], copied: false },
-      }));
+      setReplies((prev) => ({ ...prev, [tweetId]: { ...prev[tweetId], copied: false } }));
     }, 2000);
+  };
+
+  const handleArchive = (tweet: TweetSearchResult, replyText: string, xquikScore?: number) => {
+    db.saveTweet({
+      text: replyText,
+      topic: query,
+      persona: 'reply',
+      impressionType: undefined,
+      score: xquikScore ?? 0,
+      scores: {},
+      scoreReason: 'Reply arşivi',
+      engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
+      entryType: 'reply',
+      replyTo: {
+        author: tweet.author || tweet.authorHandle,
+        handle: tweet.authorHandle,
+        tweetId: tweet.id,
+        text: tweet.text.slice(0, 120),
+      },
+      xquikScore,
+    });
+    setReplies((prev) => ({ ...prev, [tweet.id]: { ...prev[tweet.id], archived: true } }));
   };
 
   if (!hasXquik) {
@@ -227,7 +269,6 @@ Sadece reply metnini döndür, açıklama yapma.`;
           {searching ? 'Aranıyor...' : 'Fırsatları Bul'}
         </button>
 
-        {/* Açıklama */}
         <div className="border border-white/[0.07] rounded-xl p-3 space-y-1.5">
           <p className="text-[11px] font-medium text-[#e8e8e0]">Neden reply?</p>
           <p className="text-[10px] text-[#6b6b72] leading-relaxed">
@@ -270,16 +311,10 @@ Sadece reply metnini döndür, açıklama yapma.`;
                       <span className="text-xs font-medium text-[#e8e8e0]">
                         {tweet.author || tweet.authorHandle}
                       </span>
-                      <span className="text-[10px] text-[#6b6b72]">
-                        @{tweet.authorHandle}
-                      </span>
-                      <span className="text-[10px] text-[#6b6b72]">
-                        {timeAgo(tweet.createdAt)}
-                      </span>
+                      <span className="text-[10px] text-[#6b6b72]">@{tweet.authorHandle}</span>
+                      <span className="text-[10px] text-[#6b6b72]">{timeAgo(tweet.createdAt)}</span>
                     </div>
-                    <p className="text-sm text-[#e8e8e0] leading-relaxed">
-                      {tweet.text}
-                    </p>
+                    <p className="text-sm text-[#e8e8e0] leading-relaxed">{tweet.text}</p>
                   </div>
                 </div>
 
@@ -299,7 +334,7 @@ Sadece reply metnini döndür, açıklama yapma.`;
                   </a>
                 </div>
 
-                {/* Reply üret butonu + sonuç */}
+                {/* Reply üret butonu */}
                 {!replyState && (
                   <button
                     onClick={() => handleGenerateReply(tweet)}
@@ -315,11 +350,31 @@ Sadece reply metnini döndür, açıklama yapma.`;
 
                 {replyState && !replyState.loading && replyState.result && (
                   <div className="space-y-2">
+                    {/* Reply metni */}
                     <div className="bg-elevated border border-white/[0.07] rounded-lg p-3">
-                      <p className="text-xs text-[#e8e8e0] leading-relaxed whitespace-pre-wrap">
-                        {replyState.result}
-                      </p>
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <p className="text-xs text-[#e8e8e0] leading-relaxed whitespace-pre-wrap flex-1">
+                          {replyState.result}
+                        </p>
+                        {/* Grok skor badge */}
+                        {replyState.scoring && (
+                          <span className="text-[9px] text-[#4a4a55] shrink-0 animate-pulse">Skor alınıyor...</span>
+                        )}
+                        {!replyState.scoring && replyState.xquikScore !== undefined && (
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border shrink-0 ${scoreColor(replyState.xquikScore)}`}>
+                            {replyState.xquikScore}
+                          </span>
+                        )}
+                      </div>
+                      {/* Grok önerisi */}
+                      {replyState.topSuggestion && (
+                        <p className="text-[10px] text-accent-yellow/80 mt-1 leading-relaxed border-t border-white/[0.05] pt-1.5">
+                          💡 {replyState.topSuggestion}
+                        </p>
+                      )}
                     </div>
+
+                    {/* Aksiyon butonları */}
                     <div className="flex gap-2">
                       <button
                         onClick={() => handleCopyReply(tweet.id, replyState.result)}
@@ -341,6 +396,19 @@ Sadece reply metnini döndür, açıklama yapma.`;
                       >
                         Yenile
                       </button>
+                      {!replyState.result.startsWith('(') && (
+                        <button
+                          onClick={() => handleArchive(tweet, replyState.result, replyState.xquikScore)}
+                          disabled={replyState.archived}
+                          className={`px-3 text-xs py-1.5 rounded-lg transition-colors ${
+                            replyState.archived
+                              ? 'bg-accent-green/10 text-accent-green cursor-default'
+                              : 'bg-white/[0.05] hover:bg-white/[0.09] text-[#6b6b72]'
+                          }`}
+                        >
+                          {replyState.archived ? '✓ Arşivlendi' : 'Arşivle'}
+                        </button>
+                      )}
                     </div>
                   </div>
                 )}
