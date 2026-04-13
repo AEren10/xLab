@@ -25,6 +25,10 @@ export interface TweetThread {
 }
 
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
+const MODEL = 'claude-haiku-4-5-20251001';
+
+const logModel = () =>
+  console.info(`%c[TweetLab] Claude API → model: ${MODEL}`, 'color:#7c6af7;font-weight:bold;font-size:11px');
 
 const baseHeaders = (apiKey: string) => ({
   'Content-Type': 'application/json',
@@ -49,11 +53,12 @@ export const claudeApi = {
     userMessage: string,
     variations = 3
   ): Promise<TweetVariation[]> {
+    logModel();
     const res = await fetch(CLAUDE_API, {
       method: 'POST',
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: MODEL,
         max_tokens: 1500,
         system: systemPrompt,
         messages: [{
@@ -78,11 +83,12 @@ export const claudeApi = {
     systemPrompt: string,
     userMessage: string
   ): Promise<TweetThread | null> {
+    logModel();
     const res = await fetch(CLAUDE_API, {
       method: 'POST',
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: MODEL,
         max_tokens: 2000,
         system: systemPrompt,
         messages: [{ role: 'user', content: userMessage }],
@@ -122,7 +128,7 @@ export const claudeApi = {
       method: 'POST',
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
-        model: 'claude-haiku-4-20250514',
+        model: MODEL,
         max_tokens: 200,
         messages: [{
           role: 'user',
@@ -153,7 +159,7 @@ Write a concise Midjourney/DALL-E image prompt (max 60 words) for a Twitter post
         method: 'POST',
         headers: baseHeaders(apiKey),
         body: JSON.stringify({
-          model: 'claude-haiku-4-20250514',
+          model: MODEL,
           max_tokens: 5,
           messages: [{ role: 'user', content: 'hi' }],
         }),

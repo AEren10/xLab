@@ -79,6 +79,27 @@ export interface TrendItem {
   query?: string;
 }
 
+// ─── Dış Trendler (Reddit / HN / Google) ─────────────────────────────────────
+
+export interface ExternalTrends {
+  reddit: Array<{ title: string; url?: string; score?: number; subreddit?: string }>;
+  hackernews: Array<{ title: string; url?: string; score?: number; comments?: number }>;
+  google: Array<{ keyword: string; interest?: number }>;
+}
+
+// ─── Dizi Çıkarıcı (Thread Extractor) ────────────────────────────────────────
+
+export interface ThreadResult {
+  id: string;
+  firstTweet: string;
+  totalTweets: number;
+  author: string;
+  authorHandle: string;
+  likes: number;
+  views?: number;
+  url: string;
+}
+
 // ─── User Profile ─────────────────────────────────────────────────────────────
 
 export interface UserProfile {
@@ -119,6 +140,13 @@ export interface StylePerformance {
   xUsername: string;
   tweetCount: number;
   tweets: StylePerformanceTweet[];
+}
+
+// ─── xquik Pipeline Sonucu ───────────────────────────────────────────────────
+
+export interface XquikTweetResult {
+  text: string;
+  score: XquikScore | null;
 }
 
 // ─── Score sonucu ────────────────────────────────────────────────────────────
@@ -438,6 +466,130 @@ export const xquikApi = {
     } catch {
       return null;
     }
+  },
+
+  // ── Dış Trendler (Reddit / HN / Google) ─────────────────────────────────────
+  // xquik'in gündem araçlarından gelen harici trend verileri.
+  // Her biri kendi endpoint'inden çekilir; hata olursa boş dizi döner.
+  async getExternalTrends(apiKey: string): Promise<ExternalTrends> {
+    const empty: ExternalTrends = { reddit: [], hackernews: [], google: [] };
+    if (!apiKey) return empty;
+    try {
+      const [redditRes, hnRes, googleRes] = await Promise.allSettled([
+        fetch(`${BASE}/reddit/trends`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/hackernews/trends`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/google/trends`, { headers: headers(apiKey) }),
+      ]);
+      const reddit = (redditRes.status === 'fulfilled' && redditRes.value.ok)
+        ? ((await redditRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
+            title: i.title || i.name || '',
+            url: i.url,
+            score: i.score || i.ups,
+            subreddit: i.subreddit,
+          }))
+        : [];
+      const hackernews = (hnRes.status === 'fulfilled' && hnRes.value.ok)
+        ? ((await hnRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
+            title: i.title || '',
+            url: i.url,
+            score: i.score || i.points,
+            comments: i.comments,
+          }))
+        : [];
+      const google = (googleRes.status === 'fulfilled' && googleRes.value.ok)
+        ? ((await googleRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
+            keyword: i.keyword || i.title || i.name || '',
+            interest: i.interest,
+          }))
+        : [];
+      return { reddit, hackernews, google };
+    } catch {
+      return empty;
+    }
+  },
+
+  // ── Dizi Çıkarıcı — konuya göre başarılı thread'leri bul ──────────────────
+  // Thread modu için ilham kaynağı: hook yapısı, içerik akışı, CTA örnekleri.
+  async searchThreads(
+    apiKey: string,
+    query: string,
+    options: { lang?: string; hours?: number; limit?: number } = {}
+  ): Promise<ThreadResult[]> {
+    if (!apiKey) return [];
+    try {
+      const { lang = 'tr', hours = 72, limit = 5 } = options;
+      const res = await fetch(`${BASE}/x/threads/search`, {
+        method: 'POST',
+        headers: headers(apiKey),
+        body: JSON.stringify({ query, lang, hours, limit }),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return (data.threads || data.items || []).map((t: any) => ({
+        id: t.id || '',
+        firstTweet: t.firstTweet || t.text || '',
+        totalTweets: t.totalTweets || t.tweetCount || 0,
+        author: t.author?.name || t.authorName || '',
+        authorHandle: t.author?.handle || t.authorHandle || '',
+        likes: t.likes || t.favoriteCount || 0,
+        views: t.views || t.viewCount,
+        url: t.url || `https://x.com/i/web/status/${t.id}`,
+      }));
+    } catch {
+      return [];
+    }
+  },
+
+  // ── Compose → Refine → Score pipeline ───────────────────────────────────────
+  // Claude API olmadan tam tweet üretimi: xquik kendi motoru ile compose eder,
+  // refine ile düzeltir, score ile puanlar. Tüm adımlar /compose endpoint'i.
+  async composeTweetPipeline(
+    apiKey: string,
+    topic: string,
+    options: { count?: number; goal?: string; lang?: string; persona?: string } = {}
+  ): Promise<XquikTweetResult[]> {
+    if (!apiKey) return [];
+    const { count = 1, goal = 'engagement', lang = 'tr', persona = 'hurricane' } = options;
+
+    const runOnce = async (): Promise<XquikTweetResult | null> => {
+      try {
+        // Step 1: Compose
+        const composeRes = await fetch(`${BASE}/compose`, {
+          method: 'POST',
+          headers: headers(apiKey),
+          body: JSON.stringify({ topic, step: 'compose', goal, lang, persona }),
+        });
+        if (!composeRes.ok) return null;
+        const cd = await composeRes.json();
+        const draft =
+          cd.draft || cd.tweet || cd.text || cd.content ||
+          cd.result?.draft || cd.result?.text || cd.rawText || '';
+        if (!draft) return null;
+
+        // Step 2: Refine (best-effort — bazı planlarda olmayabilir)
+        let refined = draft;
+        try {
+          const refineRes = await fetch(`${BASE}/compose`, {
+            method: 'POST',
+            headers: headers(apiKey),
+            body: JSON.stringify({ draft, topic, step: 'refine', goal, lang }),
+          });
+          if (refineRes.ok) {
+            const rd = await refineRes.json();
+            refined = rd.draft || rd.tweet || rd.text || rd.result?.draft || draft;
+          }
+        } catch { /* orijinal draft kullan */ }
+
+        // Step 3: Score
+        const score = await this.scoreTweet(apiKey, refined);
+        return { text: refined, score };
+      } catch {
+        return null;
+      }
+    };
+
+    const all = await Promise.all(Array.from({ length: count }, runOnce));
+    return all.filter(Boolean) as XquikTweetResult[];
   },
 
   // ── API Key Test ─────────────────────────────────────────────────────────────

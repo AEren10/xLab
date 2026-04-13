@@ -59,7 +59,8 @@ export function TweetCard({
   const [showChecklist, setShowChecklist] = useState(false);
 
   // Direkt paylaşım
-  const [postState, setPostState] = useState<'idle' | 'confirm' | 'loading' | 'done' | 'error'>('idle');
+  const [postState, setPostState] = useState<'idle' | 'editing' | 'loading' | 'done' | 'error'>('idle');
+  const [editText, setEditText] = useState(tweet.text);
   const [postedId, setPostedId] = useState('');
 
   // Görsel öneri
@@ -110,7 +111,7 @@ export function TweetCard({
     if (!xquikKey || !twitterUsername || postState === 'loading') return;
     setPostState('loading');
     try {
-      const result = await xquikApi.postTweet(xquikKey, twitterUsername, tweet.text);
+      const result = await xquikApi.postTweet(xquikKey, twitterUsername, editText);
       if (result?.tweetId) {
         setPostedId(result.tweetId);
         setPostState('done');
@@ -393,34 +394,54 @@ export function TweetCard({
         </div>
       )}
 
-      {/* Direkt Paylaş */}
+      {/* Düzenle & At */}
       {xquikKey && twitterUsername && postState !== 'done' && (
         <div className="border-t border-white/[0.05] pt-2">
           {postState === 'idle' && (
-            <button onClick={() => setPostState('confirm')}
-              className="w-full text-[10px] py-1.5 rounded-lg border border-accent-green/20 text-accent-green/70 hover:text-accent-green hover:border-accent-green/40 hover:bg-accent-green/[0.04] transition-all">
-              🚀 @{twitterUsername.replace(/^@/, '')} hesabından direkt paylaş
+            <button
+              onClick={() => { setEditText(tweet.text); setPostState('editing'); }}
+              className="w-full text-[10px] py-1.5 rounded-lg border border-accent-green/20 text-accent-green/70 hover:text-accent-green hover:border-accent-green/40 hover:bg-accent-green/[0.04] transition-all"
+            >
+              ✍️ Düzenle & At — @{twitterUsername.replace(/^@/, '')}
             </button>
           )}
-          {postState === 'confirm' && (
-            <div className="space-y-1.5">
-              <p className="text-[10px] text-accent-yellow text-center">
-                ⚠ @{twitterUsername.replace(/^@/, '')} hesabından gerçekten gönderilecek. Emin misin?
-              </p>
+          {postState === 'editing' && (
+            <div className="space-y-2">
+              <div className="relative">
+                <textarea
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  rows={5}
+                  className="w-full bg-[#0e0e11] border border-accent-green/25 rounded-xl px-3 py-2.5 text-sm text-[#e8e8e0] resize-none focus:border-accent-green/50 focus:outline-none transition-all leading-relaxed"
+                />
+                <span className={`absolute bottom-2 right-2.5 text-[10px] ${editText.length > maxLength ? 'text-accent-red' : 'text-[#4a4a55]'}`}>
+                  {editText.length}/{maxLength}
+                </span>
+              </div>
+              {!hasPremium && /https?:\/\/\S+/i.test(editText) && (
+                <p className="text-[10px] text-accent-orange bg-accent-orange/[0.06] border border-accent-orange/20 rounded-lg px-2.5 py-1.5">
+                  ⚠ Free hesap: link tweet içine yazma, reach sıfırlanır.
+                </p>
+              )}
               <div className="flex gap-2">
-                <button onClick={handleDirectPost}
-                  className="flex-1 text-[10px] py-1.5 rounded-lg bg-accent-green/[0.12] text-accent-green hover:bg-accent-green/[0.2] transition-colors">
-                  Evet, Paylaş
+                <button
+                  onClick={handleDirectPost}
+                  disabled={!editText.trim() || editText.length > maxLength}
+                  className="flex-1 text-xs py-2 rounded-lg bg-accent-green/[0.14] text-accent-green hover:bg-accent-green/[0.22] transition-colors font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  🚀 At
                 </button>
-                <button onClick={() => setPostState('idle')}
-                  className="flex-1 text-[10px] py-1.5 rounded-lg bg-white/[0.04] text-[#6b6b72] hover:bg-white/[0.08] transition-colors">
+                <button
+                  onClick={() => setPostState('idle')}
+                  className="px-4 text-xs py-2 rounded-lg bg-white/[0.04] text-[#6b6b72] hover:bg-white/[0.08] transition-colors"
+                >
                   İptal
                 </button>
               </div>
             </div>
           )}
           {postState === 'loading' && (
-            <div className="flex items-center justify-center gap-2 py-1.5">
+            <div className="flex items-center justify-center gap-2 py-2">
               <span className="w-3 h-3 border border-accent-green/40 border-t-accent-green rounded-full animate-spin" />
               <span className="text-[10px] text-accent-green/70">Gönderiliyor...</span>
             </div>

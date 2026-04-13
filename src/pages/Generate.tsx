@@ -1,12 +1,14 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { TweetCard } from '../components/TweetCard';
 import { RadarPanel } from '../components/RadarPanel';
+import { ExternalTrendsPanel } from '../components/ExternalTrendsPanel';
 import { ContextPreview } from '../components/ContextPreview';
 import { Tooltip } from '../components/Tooltip';
 import { db } from '../lib/db';
 import type { AccountProfile } from '../lib/db';
 import { xquikApi } from '../lib/xquik';
-import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult } from '../lib/xquik';
+import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult, ExternalTrends, ThreadResult, XquikTweetResult } from '../lib/xquik';
+import { XquikResultCard } from '../components/XquikResultCard';
 import { claudeApi } from '../lib/claude';
 import type { TweetVariation, TweetThread } from '../lib/claude';
 import {
@@ -438,6 +440,39 @@ export function Generate() {
   const [algoData, setAlgoData] = useState<ComposeAlgoData | null>(null);
   const [userTweets, setUserTweets] = useState<UserTweet[]>([]);
   const [mode, setMode] = useState<'tweet' | 'thread'>('tweet');
+
+  // ── Resize panel ──────────────────────────────────────────────────────────
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    const saved = localStorage.getItem('tl_panel_width');
+    return saved ? Number(saved) : 380;
+  });
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
+  const panelWidthRef = useRef(panelWidth);
+  panelWidthRef.current = panelWidth;
+
+  useLayoutEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = e.clientX - dragStartX.current;
+      const next = Math.min(600, Math.max(260, dragStartWidth.current + delta));
+      setPanelWidth(next);
+    };
+    const onUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      localStorage.setItem('tl_panel_width', String(panelWidthRef.current));
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, []);
   const [results, setResults] = useState<TweetVariation[]>([]);
   const [thread, setThread] = useState<TweetThread | null>(null);
   const [loading, setLoading] = useState(false);
@@ -448,6 +483,13 @@ export function Generate() {
   const [viralTweets, setViralTweets] = useState<TweetSearchResult[]>([]);
   const [viralLoading, setViralLoading] = useState(false);
   const viralDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Viral thread'ler — thread modu için ilham
+  const [viralThreads, setViralThreads] = useState<ThreadResult[]>([]);
+  // Dış trendler (Reddit / HN / Google)
+  const [externalTrends, setExternalTrends] = useState<ExternalTrends>({ reddit: [], hackernews: [], google: [] });
+  // xquik compose pipeline sonuçları
+  const [xquikResults, setXquikResults] = useState<XquikTweetResult[]>([]);
+  const [xquikLoading, setXquikLoading] = useState(false);
 
   useEffect(() => {
     fetch(`/personas/${personaId}.json`)
@@ -460,13 +502,14 @@ export function Generate() {
     if (settings.xquikKey) {
       xquikApi.getRadar(settings.xquikKey, 8).then(setRadarItems).catch(() => {});
       xquikApi.getAlgoData(settings.xquikKey, effectiveSettings.niche || 'general').then(setAlgoData).catch(() => {});
+      xquikApi.getExternalTrends(settings.xquikKey).then(setExternalTrends).catch(() => {});
       if (effectiveSettings.twitterUsername) {
         xquikApi.getUserTweets(settings.xquikKey, effectiveSettings.twitterUsername, 20)
           .then(setUserTweets)
           .catch(() => {});
       }
     }
-  }, [activeProfileId]);
+  }, [activeProfileId, settings.xquikKey, effectiveSettings.niche, effectiveSettings.twitterUsername]);
 
   // Profil değişince personaId sıfırla
   useEffect(() => {
@@ -480,18 +523,24 @@ export function Generate() {
       setViralTweets([]);
       return;
     }
-    setViralLoading(true);
     viralDebounceRef.current = setTimeout(async () => {
-      const results = await xquikApi.searchTweets(settings.xquikKey, topic, {
-        minFaves: 50,
-        lang: 'tr',
-        hours: 48,
-        limit: 4,
-      });
-      setViralTweets(results);
+      setViralLoading(true);
+      const [tweets, threads] = await Promise.all([
+        xquikApi.searchTweets(settings.xquikKey, topic, {
+          minFaves: 50, lang: 'tr', hours: 48, limit: 4,
+        }),
+        xquikApi.searchThreads(settings.xquikKey, topic, {
+          lang: 'tr', hours: 72, limit: 3,
+        }),
+      ]);
+      setViralTweets(tweets);
+      setViralThreads(threads);
       setViralLoading(false);
     }, 1200);
-    return () => { if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current); };
+    return () => {
+      if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current);
+      setViralLoading(false);
+    };
   }, [topic, settings.xquikKey]);
 
   useEffect(() => {
@@ -503,37 +552,59 @@ export function Generate() {
       recentTweets: db.getTweets(),
       xUserTweets: userTweets,
       radarItems, impressionType, length, goal, variations,
+      viralTweets, externalTrends,
     });
-    setCopyPrompt(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData));
-  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets, activeProfileId]);
+    setCopyPrompt(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData, viralTweets));
+  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets, viralTweets, activeProfileId]);
 
-  const handleGenerate = useCallback(async () => {
+  // ── Prompt al — API'siz, sadece kopyala ────────────────────────────────────
+  const handleCopyPrompt = useCallback(async () => {
     if (!topic.trim()) return;
+    await navigator.clipboard.writeText(copyPrompt);
+    setPromptCopied(true);
+    setTimeout(() => setPromptCopied(false), 3000);
+  }, [topic, copyPrompt]);
+
+  // ── xquik compose → refine → score pipeline ─────────────────────────────────
+  const handleXquikGenerate = useCallback(async () => {
+    if (!topic.trim() || !settings.xquikKey) return;
+    setXquikLoading(true); setError(''); setXquikResults([]); setResults([]); setThread(null);
+    try {
+      const res = await xquikApi.composeTweetPipeline(settings.xquikKey, topic, {
+        count: variations,
+        goal,
+        persona: personaId,
+        lang: 'tr',
+      });
+      if (res.length === 0) {
+        setError('xquik pipeline boş döndü — compose endpoint bu konuyu desteklemiyor olabilir.');
+      } else {
+        setXquikResults(res);
+      }
+    } catch (e: any) {
+      setError(e.message || 'xquik pipeline hatası.');
+    }
+    setXquikLoading(false);
+  }, [topic, settings.xquikKey, variations, goal, personaId]);
+
+  // ── Direkt üret — Claude API ile ────────────────────────────────────────────
+  const handleGenerate = useCallback(async () => {
+    if (!topic.trim() || !settings.claudeKey) return;
     setLoading(true); setError(''); setResults([]); setThread(null);
 
     const sys = buildSystemPrompt(persona, effectiveSettings, algoData);
 
     if (mode === 'thread') {
-      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
-      if (settings.claudeKey) {
-        try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
-        catch (e: any) { setError(e.message || 'Claude API hatası.'); }
-      } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData)).catch(() => {});
-        setError("Claude API key yok. Thread prompt panoya kopyalandı — claude.ai'a yapıştır.");
-      }
+      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets: viralThreads });
+      try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
+      catch (e: any) { setError(e.message || 'Claude API hatası.'); }
     } else {
-      const user = buildUserMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations });
-      if (settings.claudeKey) {
-        try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
-        catch (e: any) { setError(e.message || 'Claude API hatası.'); }
-      } else {
-        await navigator.clipboard.writeText(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData)).catch(() => {});
-        setError("Claude API key yok. Prompt panoya kopyalandı — claude.ai'a yapıştır.");
-      }
+      const user = buildUserMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets, externalTrends });
+      try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
+      catch (e: any) { setError(e.message || 'Claude API hatası.'); }
     }
     setLoading(false);
-  }, [topic, persona, effectiveSettings, settings.claudeKey, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets]);
+  }, [topic, persona, effectiveSettings, settings.claudeKey, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets, viralTweets]);
 
   const handleSaveTweet = (tweet: TweetVariation) => {
     db.saveTweet({
@@ -545,10 +616,23 @@ export function Generate() {
     if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, tweet.text, topic);
   };
 
+  const handleSaveXquikTweet = (text: string) => {
+    const pct = xquikResults.find(r => r.text === text)?.score?.total ?? 0;
+    db.saveTweet({
+      text, topic, persona: personaId, impressionType,
+      score: pct, scores: {}, scoreReason: 'xquik compose pipeline',
+      engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
+    });
+    if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, text, topic);
+  };
+
   return (
     <div className="flex h-full">
       {/* ── Sol panel ─────────────────────────────────────────────── */}
-      <div className="w-[310px] shrink-0 border-r border-white/[0.06] p-4 space-y-4 overflow-y-auto bg-[#0c0c0f]">
+      <div
+        style={{ width: panelWidth, minWidth: 260, maxWidth: 600 }}
+        className="shrink-0 border-r border-white/[0.06] p-4 space-y-4 overflow-y-auto bg-[#0c0c0f]"
+      >
 
         {/* Hesap Profili Seçici */}
         {profiles.length > 0 && (
@@ -602,47 +686,6 @@ export function Generate() {
         </div>
 
         {/* ── Bölüm ayracı: İçerik → Format ──── */}
-
-        {/* Viral Tweetler — konuya göre xquik'ten çekilen örnekler */}
-        {(viralLoading || viralTweets.length > 0) && (
-          <div className="rounded-xl border border-white/[0.07] overflow-hidden">
-            <div className="px-3.5 py-2.5 flex items-center justify-between border-b border-white/[0.05]">
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] font-medium text-[#8b8b96]">Konuyu Tutan Tweetler</span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
-                  xquik
-                </span>
-              </div>
-              {viralLoading && (
-                <span className="w-3 h-3 border border-accent/30 border-t-accent rounded-full animate-spin shrink-0" />
-              )}
-            </div>
-            {viralTweets.length > 0 && (
-              <div className="divide-y divide-white/[0.04]">
-                {viralTweets.map((vt) => (
-                  <div key={vt.id} className="px-3.5 py-2.5 space-y-1 hover:bg-white/[0.02] transition-colors group">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[10px] font-medium text-[#8b8b96]">@{vt.authorHandle}</span>
-                      <span className="text-[9px] text-[#4a4a55]">
-                        ❤ {vt.likes >= 1000 ? `${(vt.likes/1000).toFixed(1)}k` : vt.likes}
-                        {vt.replies > 0 && ` · 💬 ${vt.replies}`}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-[#6b6b72] leading-relaxed line-clamp-2 group-hover:text-[#8b8b96] transition-colors">
-                      {vt.text}
-                    </p>
-                    <button
-                      onClick={() => setTopic(vt.text.slice(0, 200))}
-                      className="text-[9px] text-accent/50 hover:text-accent transition-colors"
-                    >
-                      Konuya ekle →
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
 
         {/* ── FORMAT bölümü ─── */}
         <div className="flex items-center gap-2 pt-1">
@@ -814,6 +857,11 @@ export function Generate() {
         {/* Radar */}
         <RadarPanel apiKey={settings.xquikKey} onSelect={(t) => setTopic(t)} />
 
+        {/* Dış Trendler (Reddit / HN / Google) */}
+        {(externalTrends.reddit.length > 0 || externalTrends.hackernews.length > 0 || externalTrends.google.length > 0) && (
+          <ExternalTrendsPanel trends={externalTrends} onSelect={(t) => setTopic(t)} />
+        )}
+
         {/* Context preview */}
         <ContextPreview prompt={copyPrompt} />
 
@@ -830,38 +878,88 @@ export function Generate() {
 
         {/* Butonlar */}
         <div className="space-y-2 pb-2">
+
+          {/* ── Claude: Direkt Üret ── */}
           <button
             onClick={handleGenerate}
-            disabled={!topic.trim() || loading}
-            className="w-full py-2.5 rounded-xl bg-accent hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-semibold transition-all shadow-lg shadow-accent/20 hover:shadow-xl hover:shadow-accent/30 active:scale-[0.98]"
+            disabled={!topic.trim() || loading || xquikLoading || !settings.claudeKey}
+            className="w-full py-3 rounded-xl bg-accent hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-bold transition-all shadow-lg shadow-accent/20 hover:shadow-xl hover:shadow-accent/30 active:scale-[0.98]"
           >
             {loading ? (
               <span className="flex items-center justify-center gap-2">
                 <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                Üretiliyor...
+                Claude üretiyor...
               </span>
-            ) : settings.claudeKey
-              ? mode === 'thread' ? '🧵 Thread Üret' : '⚡ Şimdi Üret'
-              : '⚡ Üret + Promptu Kopyala'
+            ) : (
+              <span className="flex items-center justify-center gap-2">
+                <span>⚡</span>
+                {mode === 'thread' ? 'Claude ile Thread Üret' : 'Claude ile Üret'}
+              </span>
+            )}
+          </button>
+
+          {/* ── xquik pipeline ── (her zaman görünür, xquik key varsa aktif) */}
+          <button
+            onClick={handleXquikGenerate}
+            disabled={!topic.trim() || xquikLoading || loading || !settings.xquikKey}
+            className="w-full py-3 rounded-xl border border-accent/30 bg-accent/[0.08] hover:bg-accent/[0.14] disabled:opacity-30 disabled:cursor-not-allowed text-accent text-sm font-bold transition-all active:scale-[0.98]"
+          >
+            {xquikLoading ? (
+              <span className="flex items-center justify-center gap-2">
+                <span className="w-3.5 h-3.5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
+                xquik üretiyor...
+              </span>
+            ) : (
+              <span className="flex items-center justify-center gap-2">
+                <span>🔮</span>
+                xquik Pipeline ile Üret
+              </span>
+            )}
+          </button>
+          {!settings.xquikKey && (
+            <p className="text-[9px] text-center text-[#3a3a45]">xquik pipeline için Ayarlar'dan xquik key ekle</p>
+          )}
+
+          {/* ── Ayırıcı ── */}
+          <div className="flex items-center gap-2 py-0.5">
+            <div className="h-px flex-1 bg-white/[0.05]" />
+            <span className="text-[9px] text-[#3a3a45] uppercase tracking-widest">veya</span>
+            <div className="h-px flex-1 bg-white/[0.05]" />
+          </div>
+
+          {/* ── Prompt Al ── */}
+          <button
+            onClick={handleCopyPrompt}
+            disabled={!topic.trim()}
+            className={`w-full py-2 rounded-xl border disabled:opacity-30 disabled:cursor-not-allowed text-xs font-medium transition-all ${
+              promptCopied
+                ? 'border-accent-green/50 bg-accent-green/10 text-accent-green'
+                : 'border-white/[0.08] hover:bg-white/[0.03] hover:border-white/[0.14] text-[#6b6b72]'
+            }`}
+          >
+            {promptCopied
+              ? '✓ Kopyalandı — claude.ai\'a yapıştır'
+              : <span className="flex items-center justify-center gap-2"><span>📋</span>Prompt Al</span>
             }
           </button>
 
-          <button
-            onClick={async () => {
-              await navigator.clipboard.writeText(copyPrompt);
-              setPromptCopied(true);
-              setTimeout(() => setPromptCopied(false), 3000);
-            }}
-            disabled={!topic.trim()}
-            className={`w-full py-2 rounded-xl border disabled:opacity-30 disabled:cursor-not-allowed text-xs transition-all ${
-              promptCopied
-                ? 'border-accent-green/40 bg-accent-green/10 text-accent-green'
-                : 'border-white/[0.08] hover:bg-white/[0.04] hover:border-white/[0.12] text-[#8b8b96]'
-            }`}
-          >
-            {promptCopied ? '✓ Kopyalandı — claude.ai\'a yapıştır' : 'Sadece Promptu Kopyala'}
-          </button>
         </div>
+      </div>
+
+      {/* ── Resize handle ─────────────────────────────────────────── */}
+      <div
+        onMouseDown={(e) => {
+          isDragging.current = true;
+          dragStartX.current = e.clientX;
+          dragStartWidth.current = panelWidth;
+          document.body.style.cursor = 'col-resize';
+          document.body.style.userSelect = 'none';
+          e.preventDefault();
+        }}
+        className="w-1 shrink-0 hover:bg-accent/30 active:bg-accent/50 cursor-col-resize transition-colors group relative"
+        title="Sürükle"
+      >
+        <div className="absolute inset-y-0 -left-1 -right-1" />
       </div>
 
       {/* ── Sağ panel ─────────────────────────────────────────────── */}
@@ -870,15 +968,59 @@ export function Generate() {
         {/* Timing + header */}
         <div className="flex items-center justify-between mb-5">
           <TimingBadge />
-          {results.length > 0 && (
-            <span className="text-xs text-[#6b6b72]">{results.length} varyasyon</span>
-          )}
+          <div className="flex items-center gap-2">
+            {(results.length > 0 || xquikResults.length > 0 || thread) && (
+              <button
+                onClick={() => { setResults([]); setXquikResults([]); setThread(null); setError(''); }}
+                className="text-[10px] text-[#4a4a55] hover:text-[#8b8b96] transition-colors px-2 py-0.5 rounded-lg hover:bg-white/[0.04]"
+              >
+                ✕ Temizle
+              </button>
+            )}
+            {results.length > 0 && <span className="text-xs text-[#6b6b72]">{results.length} varyasyon</span>}
+            {xquikResults.length > 0 && <span className="text-xs text-accent/60">{xquikResults.length} xquik sonuç</span>}
+          </div>
         </div>
 
-        {/* Hata / bilgi */}
+        {/* Hata */}
         {error && (
-          <div className="mb-4 p-3.5 rounded-xl bg-accent-orange/10 border border-accent-orange/20 text-accent-orange text-xs leading-relaxed">
-            {error}
+          <div className="mb-4 flex items-start gap-3 px-4 py-3 rounded-xl bg-accent-red/[0.08] border border-accent-red/25">
+            <span className="text-accent-red text-base shrink-0 mt-0.5">✗</span>
+            <p className="text-sm text-[#e8e8e0] leading-relaxed flex-1">{error}</p>
+            <button onClick={() => setError('')} className="text-[#4a4a55] hover:text-[#8b8b96] transition-colors shrink-0 text-lg leading-none">×</button>
+          </div>
+        )}
+
+        {/* xquik loading */}
+        {xquikLoading && (
+          <div className="space-y-3 mb-3">
+            <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+              <span className="text-xs text-accent/70">xquik compose → refine → score çalışıyor...</span>
+            </div>
+            {[...Array(variations)].map((_, i) => (
+              <SkeletonCard key={i} />
+            ))}
+          </div>
+        )}
+
+        {/* xquik sonuçları */}
+        {!xquikLoading && xquikResults.length > 0 && (
+          <div className="space-y-3 mb-5">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-semibold text-accent/80 uppercase tracking-widest">xquik Pipeline</span>
+              <div className="h-px flex-1 bg-accent/10" />
+            </div>
+            {xquikResults.map((r, i) => (
+              <XquikResultCard
+                key={i}
+                result={r}
+                index={i}
+                xquikKey={settings.xquikKey}
+                twitterUsername={effectiveSettings.twitterUsername}
+                onSave={handleSaveXquikTweet}
+              />
+            ))}
           </div>
         )}
 
@@ -975,6 +1117,100 @@ export function Generate() {
           <EmptyState algoData={algoData} />
         )}
       </div>
+
+      {/* ── İlham Paneli — viral tweetler ─────────────────────────── */}
+      {(viralLoading || viralTweets.length > 0) && (
+        <div className="w-[270px] shrink-0 border-l border-white/[0.06] bg-[#0a0a0d] flex flex-col overflow-hidden">
+          {/* Header */}
+          <div className="px-3.5 py-3 border-b border-white/[0.05] flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-[#8b8b96]">İlham Kaynakları</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                xquik
+              </span>
+              {viralTweets.length > 0 && (
+                <span className="text-[9px] text-[#4a4a55]">{viralTweets.length}</span>
+              )}
+            </div>
+            {viralLoading && (
+              <span className="w-3 h-3 border border-accent/30 border-t-accent rounded-full animate-spin shrink-0" />
+            )}
+          </div>
+
+          {/* Açıklama */}
+          <div className="px-3.5 py-2 border-b border-white/[0.04] shrink-0">
+            <p className="text-[9px] text-[#4a4a55] leading-relaxed">
+              Claude bu tweetleri analiz ederek senin için içerik üretiyor. Hangisi tutmuş, neden?
+            </p>
+          </div>
+
+          {/* Scrollable tweet listesi */}
+          <div className="flex-1 overflow-y-auto divide-y divide-white/[0.04]">
+            {viralLoading && viralTweets.length === 0 && (
+              <div className="px-3.5 py-4 space-y-3">
+                {[...Array(4)].map((_, i) => (
+                  <div key={i} className="space-y-1.5">
+                    <div className="h-2.5 w-24 animate-shimmer rounded" />
+                    <div className="h-2 w-full animate-shimmer rounded" />
+                    <div className="h-2 w-4/5 animate-shimmer rounded" />
+                  </div>
+                ))}
+              </div>
+            )}
+            {viralTweets.map((vt, idx) => (
+              <div key={vt.id} className="px-3.5 py-3 hover:bg-white/[0.02] transition-colors group">
+                {/* Sıra + yazar */}
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <span className="text-[9px] font-bold text-[#3a3a48] w-4 shrink-0">{idx + 1}</span>
+                  <span className="text-[10px] font-semibold text-[#8b8b96] truncate">@{vt.authorHandle}</span>
+                  <div className="flex items-center gap-1 ml-auto shrink-0">
+                    {vt.likes > 0 && (
+                      <span className="text-[9px] text-accent-red/70">
+                        ♥ {vt.likes >= 1000 ? `${(vt.likes / 1000).toFixed(1)}k` : vt.likes}
+                      </span>
+                    )}
+                    {vt.replies > 0 && (
+                      <span className="text-[9px] text-accent/60">
+                        · 💬 {vt.replies}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Tweet metni — tam, scrollable değil çünkü panel zaten scroll ediliyor */}
+                <p className="text-[11px] text-[#7a7a85] leading-relaxed group-hover:text-[#a8a8b0] transition-colors">
+                  {vt.text}
+                </p>
+
+                {/* Aksiyonlar */}
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    onClick={() => setTopic(vt.text.slice(0, 200))}
+                    className="text-[9px] text-accent/50 hover:text-accent transition-colors font-medium"
+                  >
+                    Konuya ekle →
+                  </button>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(vt.text)}
+                    className="text-[9px] text-[#3a3a48] hover:text-[#6b6b72] transition-colors ml-auto"
+                  >
+                    Kopyala
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Footer notu */}
+          {viralTweets.length > 0 && (
+            <div className="px-3.5 py-2.5 border-t border-white/[0.04] shrink-0">
+              <p className="text-[9px] text-[#3a3a48] leading-relaxed">
+                Son 2 saatte ≥50 like alan tweetler · niş: {effectiveSettings.niche || 'general'}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

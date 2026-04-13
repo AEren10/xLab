@@ -73,7 +73,7 @@ export default function App() {
     <div className="flex h-screen bg-[#09090b] text-[#e8e8e0] overflow-hidden">
 
       {/* Sidebar */}
-      <aside className="w-[200px] shrink-0 flex flex-col relative"
+      <aside className="w-[230px] shrink-0 flex flex-col relative"
         style={{
           background: 'linear-gradient(180deg, #0f0f12 0%, #0c0c0e 100%)',
           borderRight: '1px solid rgba(255,255,255,0.055)',

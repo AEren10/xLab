@@ -85,17 +85,21 @@ export const db = {
   },
 
   // ── Settings ─────────────────────────────────────────────────────────────
-  getSettings: (): Settings =>
-    get(KEYS.settings, {
+  getSettings: (): Settings => {
+    const envKey = (import.meta.env.VITE_CLAUDE_API_KEY as string) || '';
+    const defaults: Settings = {
       xquikKey: '',
-      claudeKey: '',
+      claudeKey: envKey,
       activeProfileId: '',
       niche: '',
       defaultPersona: 'hurricane',
       toneProfile: '',
       twitterUsername: '',
       hasPremium: false,
-    }),
+    };
+    const saved = get<Partial<Settings>>(KEYS.settings, {});
+    return { ...defaults, ...saved, claudeKey: saved.claudeKey || envKey };
+  },
 
   saveSettings: (s: Partial<Settings>) =>
     set(KEYS.settings, { ...get(KEYS.settings, {}), ...s }),

@@ -17,7 +17,7 @@
  */
 import { ALGORITHM_RULES, ALGORITHM_RULES_SHORT } from './skill';
 import type { TweetEntry, Settings } from './db';
-import type { RadarItem, ComposeAlgoData, UserTweet } from './xquik';
+import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult, ExternalTrends } from './xquik';
 
 interface BuildContextParams {
   topic: string;
@@ -31,6 +31,8 @@ interface BuildContextParams {
   variations: number;
   algoData?: ComposeAlgoData | null;
   xUserTweets?: UserTweet[]; // xquik getUserTweets'ten gelen gerçek X verisi (öncelikli)
+  viralTweets?: TweetSearchResult[]; // xquik searchTweets'ten gelen viral tweetler
+  externalTrends?: ExternalTrends;  // Reddit / HN / Google trendler
 }
 
 export function buildSystemPrompt(
@@ -145,6 +147,8 @@ export function buildUserMessage(params: BuildContextParams): string {
     goal,
     variations,
     xUserTweets,
+    viralTweets,
+    externalTrends,
   } = params;
 
   // recentPerf: Önce xquik'ten gelen gerçek X verisi kullanılır (xUserTweets).
@@ -193,6 +197,36 @@ export function buildUserMessage(params: BuildContextParams): string {
     ? '- HESAP FREE: Tweet içine link YAZMA, link varsa reply\'a yaz. 280 karakter sınırı.'
     : '- Hesap Premium: Extended tweet (500 karakter) ve link kullanılabilir.';
 
+  const externalTrendsBlock = (() => {
+    const parts: string[] = [];
+    if (externalTrends?.reddit?.length) {
+      parts.push(`Reddit: ${externalTrends.reddit.slice(0, 4).map((r) => `"${r.title}"`).join(', ')}`);
+    }
+    if (externalTrends?.hackernews?.length) {
+      parts.push(`Hacker News: ${externalTrends.hackernews.slice(0, 4).map((r) => `"${r.title}"`).join(', ')}`);
+    }
+    if (externalTrends?.google?.length) {
+      parts.push(`Google Trends: ${externalTrends.google.slice(0, 4).map((r) => r.keyword).join(', ')}`);
+    }
+    if (!parts.length) return '';
+    return `## Dünya Gündemi (Reddit / HN / Google)\nBu konular şu an viral — tweet konunla bağlantı kur veya görmezden gel:\n${parts.join('\n')}`;
+  })();
+
+  const viralBlock = (() => {
+    if (!viralTweets || viralTweets.length === 0) return '';
+    return `## Bu Konuda Tutmuş Tweetler (xquik — son 48 saat)
+Aşağıdaki tweetler bu konuda yüksek etkileşim almış. Neden tuttuklarını analiz et:
+- Hook nasıl kurulmuş?
+- Hangi duyguya/merak'a dokunuyor?
+- Yapı nasıl?
+Benzer enerjiyi yakala ama birebir kopyalama, persona kurallarına göre yeniden yaz.
+
+${viralTweets
+  .slice(0, 4)
+  .map((t) => `@${t.authorHandle} (❤${t.likes} 💬${t.replies} 🔁${t.retweets}):\n"${t.text}"`)
+  .join('\n\n')}`;
+  })();
+
   return `## Task
 Generate ${variations} tweet variation(s) about: "${topic}"
 
@@ -214,7 +248,7 @@ ${recentPerf}
 - No hashtags, no emojis
 - End with question or open loop
 - Sound human, not AI-generated
-- First line must hook immediately`;
+- First line must hook immediately${externalTrendsBlock ? `\n\n${externalTrendsBlock}` : ''}${viralBlock ? `\n\n${viralBlock}` : ''}`;
 }
 
 /**
@@ -232,6 +266,7 @@ export function buildCopyPrompt(
   persona: any = null,
   settings: any = null,
   algoData: any = null,
+  viralTweets?: TweetSearchResult[],
 ): string {
   const algoSection = (() => {
     // xquik canlı veri varsa onu kullan (zaten kısa)
@@ -246,6 +281,21 @@ export function buildCopyPrompt(
     ? `Persona: ${persona.name || ''} — ${persona.tone || ''}\nDil kuralları: ${(persona.style_rules || []).slice(0, 3).join('; ')}`
     : 'Persona: Türkçe, doğrudan, insan gibi';
 
+  const viralBlock = (() => {
+    if (!viralTweets || viralTweets.length === 0) return '';
+    return `## Bu Konuda Tutmuş Tweetler (xquik — son 48 saat)
+Aşağıdaki tweetler bu konuda yüksek etkileşim almış. Neden tuttuklarını analiz et:
+- Hook nasıl kurulmuş?
+- Hangi duyguya/merak'a dokunuyor?
+- Yapı nasıl?
+Benzer enerjiyi yakala ama birebir kopyalama, persona kurallarına göre yeniden yaz.
+
+${viralTweets
+  .slice(0, 4)
+  .map((t) => `@${t.authorHandle} (❤${t.likes} 💬${t.replies} 🔁${t.retweets}):\n"${t.text}"`)
+  .join('\n\n')}`;
+  })();
+
   return `Sen bir X/Twitter içerik uzmanısın. Türkçe tweet üretiyorsun.
 ${algoSection}
 ${personaLine}${toneNote}
@@ -254,7 +304,7 @@ OUTPUT FORMAT — SADECE bu JSON'u yaz, hiç açıklama ekleme:
 
 ---
 
-${userMessage}
+${userMessage}${viralBlock ? `\n\n${viralBlock}` : ''}
 
 HATIRLATMA: Sadece JSON array döndür. Markdown code block kullanma. Açıklama yapma. Türkçe yaz.`;
 }
@@ -265,7 +315,7 @@ HATIRLATMA: Sadece JSON array döndür. Markdown code block kullanma. Açıklama
  * Yapı: Hook → 2-3 content tweet → CTA.
  */
 export function buildThreadMessage(params: BuildContextParams): string {
-  const { topic, settings, radarItems, goal, xUserTweets, recentTweets } = params;
+  const { topic, settings, radarItems, goal, xUserTweets, recentTweets, viralTweets: viralThreads } = params;
   const topTweet = (xUserTweets && xUserTweets.length > 0)
     ? xUserTweets.sort((a, b) => (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2))[0]
     : recentTweets[0];
@@ -301,7 +351,7 @@ export function buildThreadMessage(params: BuildContextParams): string {
 
 ## Güncel Trendler (ilgili varsa kullan)
 ${trends}
-${topTweetNote}
+${topTweetNote}${viralThreads && viralThreads.length > 0 ? `\n## Bu Konuda Tutmuş Thread'ler (ilham al, kopyalama)\n${viralThreads.slice(0, 3).map((t) => `@${t.authorHandle} (❤${t.likes}, ${t.totalTweets} tweet):\n"${t.firstTweet}"`).join('\n\n')}\n` : ''}
 ## Output Format — SADECE bu JSON, markdown yok:
 {
   "tweets": [
