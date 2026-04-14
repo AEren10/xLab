@@ -290,6 +290,22 @@ function StartTab() {
         </div>
       </Section>
 
+      <Section title="Üret Sayfası Göstergeleri">
+        {[
+          { badge: '⚡ Tam mod Claude + xquik', color: 'text-[#4ade80]', desc: 'Her iki API key de bağlı. Radar trendleri, viral tweet analizi ve Grok algoritma verisi Claude\'a besleniyor.' },
+          { badge: '🧠 Grok canlı veri aktif', color: 'text-[#7c6af7]', desc: 'xquik\'in /compose endpoint\'i üzerinden Grok\'un güncel algoritma kuralları çekildi. Claude bu kurallara göre tweet yazıyor — statik kurallar yerine canlı veri.' },
+          { badge: '📡 Radar Gündem', color: 'text-[#facc15]', desc: 'xquik radar\'dan gelen 8 gündem konusu. Bunlar Claude\'un context\'ine giriyor — konunla ilgiliyse Claude bağlantı kuruyor.' },
+          { badge: '🔥 İlham Paneli (sağ)', color: 'text-accent', desc: 'Konunda son 72 saatte yüksek etkileşim alan tweetler. Claude bunları analiz ediyor: hook nasıl kurulmuş, hangi duyguya dokunuyor. Benzer enerjiyle yeni yazıyor.' },
+        ].map((item) => (
+          <div key={item.badge} className="flex gap-3 p-3 rounded-xl bg-white/[0.02] border border-white/[0.06]">
+            <div>
+              <p className={`text-xs font-semibold font-mono ${item.color}`}>{item.badge}</p>
+              <p className="text-xs text-[#6b6b72] mt-1 leading-relaxed">{item.desc}</p>
+            </div>
+          </div>
+        ))}
+      </Section>
+
       <InfoBox color="accent" icon="💬" title="Temel Akış">
         Konu yaz → içerik tipi seç → Claude ile üret → Grok skoru al → arşivle veya direkt paylaş.
         Viral tweetlere reply atarak hesabın büyür.

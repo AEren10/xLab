@@ -28,7 +28,20 @@
       "Bash(find C:/Users/A.Eren/Documents -name *.md)",
       "Bash(npx tsc:*)",
       "WebSearch",
-      "mcp__e1d840ac-b267-4247-9c7f-5a681a63b17f__xquik"
+      "mcp__e1d840ac-b267-4247-9c7f-5a681a63b17f__xquik",
+      "Bash(npm run:*)",
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(python -m json.tool)",
+      "Bash(grep -r \"Stop\\\\|dev server\\\\|preview\" C:/Users/A.Eren/.claude/ --include=*.json)",
+      "Bash(xargs grep:*)",
+      "Bash(find C:/Users/A.Eren/Desktop/xMaker/.claude -name hookify*.md)",
+      "Bash(find C:/Users/A.Eren/.claude -name hookify*.md -not -path */node_modules/*)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d, indent=2\\)\\)\")",
+      "Bash(find C:/Users/A.Eren/.claude/plugins -path */claude-preview* -o -path */preview*)",
+      "Bash(find C:/Users/A.Eren -name CLAUDE.md -not -path */node_modules/* -not -path */.git/*)",
+      "Bash(node -e \":*)",
+      "Bash(find /c/Users/A.Eren/Desktop/xMaker/src -type f \\\\\\( -name \"*.tsx\" -o -name \"*.ts\" \\\\\\) -exec wc -l {} \\\\;)"
     ]
   }
 }

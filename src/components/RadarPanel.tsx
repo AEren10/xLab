@@ -10,7 +10,7 @@ interface RadarPanelProps {
 export function RadarPanel({ apiKey, onSelect }: RadarPanelProps) {
   const [items, setItems] = useState<RadarItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   const [error, setError] = useState('');
 
   const load = async () => {
@@ -32,8 +32,8 @@ export function RadarPanel({ apiKey, onSelect }: RadarPanelProps) {
   };
 
   useEffect(() => {
-    if (open && items.length === 0) load();
-  }, [open]);
+    if (items.length === 0 && apiKey) load();
+  }, [apiKey]);
 
   return (
     <div className="border border-white/[0.07] rounded-xl overflow-hidden">

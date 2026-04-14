@@ -2,11 +2,12 @@ export interface TweetVariation {
   text: string;
   scores: {
     hook: number;
-    information: number;
     reply_potential: number;
+    dwell_potential: number;
+    information: number;
     algorithm: number;
     persona: number;
-    originality: number;
+    [key: string]: number;
   };
   total_score: number;
   score_reason: string;
@@ -34,11 +35,20 @@ const baseHeaders = (apiKey: string) => ({
   'Content-Type': 'application/json',
   'x-api-key': apiKey,
   'anthropic-version': '2023-06-01',
+  'anthropic-beta': 'prompt-caching-2024-07-31',
   'anthropic-dangerous-direct-browser-access': 'true',
 });
 
 function safeParseJSON<T>(raw: string, _fallback: T): T {
-  const clean = raw.replace(/```json|```/g, '').trim();
+  // Markdown fence temizle
+  let clean = raw.replace(/```json|```/g, '').trim();
+  // Önündeki açıklama metnini at — { veya [ ile başlayan kısımdan al
+  const objIdx = clean.indexOf('{');
+  const arrIdx = clean.indexOf('[');
+  if (objIdx !== -1 || arrIdx !== -1) {
+    const start = objIdx === -1 ? arrIdx : arrIdx === -1 ? objIdx : Math.min(objIdx, arrIdx);
+    clean = clean.slice(start);
+  }
   try {
     return JSON.parse(clean) as T;
   } catch {
@@ -59,8 +69,8 @@ export const claudeApi = {
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1500,
-        system: systemPrompt,
+        max_tokens: 1200,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: [{
           role: 'user',
           content: `${userMessage}\n\nGenerate ${variations} tweet variations. Return ONLY a JSON array, no markdown.`,
@@ -74,7 +84,9 @@ export const claudeApi = {
     }
 
     const data = await res.json();
+    console.info('[claude] response:', JSON.stringify(data).slice(0, 500));
     const text = data.content?.[0]?.text || '[]';
+    console.info('[claude] text:', text.slice(0, 300));
     return safeParseJSON<TweetVariation[]>(text, []);
   },
 
@@ -89,8 +101,8 @@ export const claudeApi = {
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2000,
-        system: systemPrompt,
+        max_tokens: 2500,
+        system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMessage }],
       }),
     });
@@ -146,6 +158,41 @@ Write a concise Midjourney/DALL-E image prompt (max 60 words) for a Twitter post
       throw new Error(err?.error?.message || `API error: ${res.status}`);
     }
 
+    const data = await res.json();
+    return (data.content?.[0]?.text || '').trim();
+  },
+
+  /**
+   * Verilen tweete kısa, güçlü bir reply üretir. Düz metin döner (JSON yok).
+   */
+  async generateReply(apiKey: string, tweetText: string, authorHandle: string): Promise<string> {
+    const res = await fetch(CLAUDE_API, {
+      method: 'POST',
+      headers: baseHeaders(apiKey),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 120,
+        messages: [{
+          role: 'user',
+          content: `Aşağıdaki tweete güçlü bir reply yaz.
+
+KURAL:
+- Maksimum 180 karakter
+- Değer ekle veya ilginç bir açı getir
+- Soru veya açık uç ile bitir — diyaloğu sürdür
+- İnsan gibi yaz (em dash yok, bullet yok)
+- Türkçe, hashtag ve emoji yok
+
+@${authorHandle}: ${tweetText.slice(0, 500)}
+
+Sadece reply metnini döndür, başka hiçbir şey yazma.`,
+        }],
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error?.message || `API error: ${res.status}`);
+    }
     const data = await res.json();
     return (data.content?.[0]?.text || '').trim();
   },

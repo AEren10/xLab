@@ -229,6 +229,7 @@ export function Settings() {
   const [profiles, setProfiles] = useState<AccountProfile[]>(db.getProfiles());
   const [claudeTest, setClaudeTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string }>({ status: 'idle' });
   const [xquikTest, setXquikTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string }>({ status: 'idle' });
+  const [xquikAccount, setXquikAccount] = useState<{ subscription?: string; credits?: number; creditsUsed?: number } | null>(null);
 
   const testClaude = async () => {
     if (!settings.claudeKey) return;
@@ -241,8 +242,12 @@ export function Settings() {
     if (!settings.xquikKey) return;
     setXquikTest({ status: 'loading' });
     try {
-      const ok = await xquikApi.testKey(settings.xquikKey);
+      const [ok, info] = await Promise.all([
+        xquikApi.testKey(settings.xquikKey),
+        xquikApi.getAccountInfo(settings.xquikKey),
+      ]);
       setXquikTest(ok ? { status: 'ok', msg: 'Bağlantı başarılı' } : { status: 'error', msg: 'Geçersiz key' });
+      if (info) setXquikAccount(info);
     } catch (e: any) {
       setXquikTest({ status: 'error', msg: e.message });
     }
@@ -318,9 +323,28 @@ export function Settings() {
               <span className="text-[10px] text-accent-green">✓ {xquikTest.msg}</span>
             )}
             {xquikTest.status === 'error' && (
-              <span className="text-[10px] text-accent-red">✗ {xquikTest.msg}</span>
+              <span className="text-[10px] text-red-400">✗ {xquikTest.msg}</span>
             )}
           </div>
+          {xquikAccount && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {xquikAccount.subscription && (
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/[0.04] text-[#8b8b96]">
+                  Plan: <span className="text-[#e8e8e0]">{xquikAccount.subscription}</span>
+                </span>
+              )}
+              {xquikAccount.credits != null && (
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/[0.04] text-[#8b8b96]">
+                  Kredi: <span className="text-accent-green">{xquikAccount.credits.toLocaleString()}</span>
+                </span>
+              )}
+              {xquikAccount.creditsUsed != null && (
+                <span className="text-[10px] px-2 py-0.5 rounded-md bg-white/[0.04] text-[#8b8b96]">
+                  Kullanılan: <span className="text-[#e8e8e0]">{xquikAccount.creditsUsed.toLocaleString()}</span>
+                </span>
+              )}
+            </div>
+          )}
         </Field>
 
         <Field

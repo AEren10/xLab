@@ -87,8 +87,9 @@ export const db = {
   // ── Settings ─────────────────────────────────────────────────────────────
   getSettings: (): Settings => {
     const envKey = (import.meta.env.VITE_CLAUDE_API_KEY as string) || '';
+    const envXquik = (import.meta.env.VITE_XQUIK_API_KEY as string) || '';
     const defaults: Settings = {
-      xquikKey: '',
+      xquikKey: envXquik,
       claudeKey: envKey,
       activeProfileId: '',
       niche: '',
@@ -98,7 +99,7 @@ export const db = {
       hasPremium: false,
     };
     const saved = get<Partial<Settings>>(KEYS.settings, {});
-    return { ...defaults, ...saved, claudeKey: saved.claudeKey || envKey };
+    return { ...defaults, ...saved, claudeKey: saved.claudeKey || envKey, xquikKey: saved.xquikKey || envXquik };
   },
 
   saveSettings: (s: Partial<Settings>) =>

@@ -7,8 +7,7 @@ import { Tooltip } from '../components/Tooltip';
 import { db } from '../lib/db';
 import type { AccountProfile } from '../lib/db';
 import { xquikApi } from '../lib/xquik';
-import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult, ExternalTrends, ThreadResult, XquikTweetResult } from '../lib/xquik';
-import { XquikResultCard } from '../components/XquikResultCard';
+import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult, ExternalTrends, ThreadResult } from '../lib/xquik';
 import { claudeApi } from '../lib/claude';
 import type { TweetVariation, TweetThread } from '../lib/claude';
 import {
@@ -20,12 +19,12 @@ import {
 import { getCurrentSlot } from '../lib/skill';
 
 const IMPRESSION_TYPES = [
-  { id: 'Data',     label: 'Data',     tip: 'Stat, rakam, araştırma. Güvenilirlik yüksek, bookmark alan içerik.' },
-  { id: 'Story',    label: 'Story',    tip: 'Kişisel deneyim. Dwell time artırır — okutturan içerik.' },
-  { id: 'Hot Take', label: 'Hot Take', tip: 'Tartışma açar, reply patlar. Dikkatli kullan, negatif sinyal riski var.' },
-  { id: 'Edu',      label: 'Edu',      tip: 'Öğretici. "Bunu bilmiyordum" bookmark oranı yüksek.' },
-  { id: 'Inspire',  label: 'Inspire',  tip: 'Motivasyon, bakış açısı. RT ve quote alır, reply az.' },
-  { id: 'Humor',    label: 'Humor',    tip: 'Bağlam gerektirir. Yanlış zamanda atılırsa sıfır reach.' },
+  { id: 'Data',     label: 'Veri',      tip: 'Stat, rakam, araştırma. Güvenilirlik yüksek, bookmark alan içerik.' },
+  { id: 'Story',    label: 'Hikaye',    tip: 'Kişisel deneyim. Dwell time artırır — okutturan içerik.' },
+  { id: 'Hot Take', label: 'Cesur Fikir', tip: 'Tartışma açar, reply patlar. Dikkatli kullan, negatif sinyal riski var.' },
+  { id: 'Edu',      label: 'Eğitici',   tip: 'Öğretici. "Bunu bilmiyordum" bookmark oranı yüksek.' },
+  { id: 'Inspire',  label: 'İlham',     tip: 'Motivasyon, bakış açısı. RT ve quote alır, reply az.' },
+  { id: 'Humor',    label: 'Mizah',     tip: 'Bağlam gerektirir. Yanlış zamanda atılırsa sıfır reach.' },
 ];
 
 const LENGTHS = [
@@ -428,13 +427,14 @@ export function Generate() {
     ? { ...settings, niche: activeProfile.niche, defaultPersona: activeProfile.defaultPersona, toneProfile: activeProfile.toneProfile, twitterUsername: activeProfile.twitterUsername, hasPremium: activeProfile.hasPremium }
     : settings;
 
-  const [topic, setTopic] = useState('');
-  const [impressionType, setImpressionType] = useState('Data');
-  const [length, setLength] = useState('standard');
-  const [goal, setGoal] = useState('Engagement');
-  const [variations, setVariations] = useState(3);
+  const ss = sessionStorage;
+  const [topic, setTopic] = useState(() => ss.getItem('gen_topic') || '');
+  const [impressionType, setImpressionType] = useState(() => ss.getItem('gen_type') || 'Data');
+  const [length, setLength] = useState(() => ss.getItem('gen_length') || 'standard');
+  const [goal, setGoal] = useState(() => ss.getItem('gen_goal') || 'Engagement');
+  const [variations, setVariations] = useState(() => Number(ss.getItem('gen_vars')) || 3);
   const [persona, setPersona] = useState<any>(null);
-  const [personaId, setPersonaId] = useState(effectiveSettings.defaultPersona || 'hurricane');
+  const [personaId, setPersonaId] = useState(() => ss.getItem('gen_persona') || effectiveSettings.defaultPersona || 'hurricane');
   const personaList = ['hurricane', 'tr_educational', 'tr_controversial', 'tr_casual'];
   const [radarItems, setRadarItems] = useState<RadarItem[]>([]);
   const [algoData, setAlgoData] = useState<ComposeAlgoData | null>(null);
@@ -487,9 +487,6 @@ export function Generate() {
   const [viralThreads, setViralThreads] = useState<ThreadResult[]>([]);
   // Dış trendler (Reddit / HN / Google)
   const [externalTrends, setExternalTrends] = useState<ExternalTrends>({ reddit: [], hackernews: [], google: [] });
-  // xquik compose pipeline sonuçları
-  const [xquikResults, setXquikResults] = useState<XquikTweetResult[]>([]);
-  const [xquikLoading, setXquikLoading] = useState(false);
 
   useEffect(() => {
     fetch(`/personas/${personaId}.json`)
@@ -511,6 +508,14 @@ export function Generate() {
     }
   }, [activeProfileId, settings.xquikKey, effectiveSettings.niche, effectiveSettings.twitterUsername]);
 
+  // State'i sessionStorage'a persist et — sayfa değişince kaybolmasın
+  useEffect(() => { sessionStorage.setItem('gen_topic', topic); }, [topic]);
+  useEffect(() => { sessionStorage.setItem('gen_type', impressionType); }, [impressionType]);
+  useEffect(() => { sessionStorage.setItem('gen_length', length); }, [length]);
+  useEffect(() => { sessionStorage.setItem('gen_goal', goal); }, [goal]);
+  useEffect(() => { sessionStorage.setItem('gen_vars', String(variations)); }, [variations]);
+  useEffect(() => { sessionStorage.setItem('gen_persona', personaId); }, [personaId]);
+
   // Profil değişince personaId sıfırla
   useEffect(() => {
     setPersonaId(effectiveSettings.defaultPersona || 'hurricane');
@@ -527,12 +532,13 @@ export function Generate() {
       setViralLoading(true);
       const [tweets, threads] = await Promise.all([
         xquikApi.searchTweets(settings.xquikKey, topic, {
-          minFaves: 50, lang: 'tr', hours: 48, limit: 4,
+          minFaves: 100, lang: 'tr', hours: 72, limit: 10,
         }),
         xquikApi.searchThreads(settings.xquikKey, topic, {
           lang: 'tr', hours: 72, limit: 3,
         }),
       ]);
+      console.info('[viralTweets] çekilen:', tweets.length, tweets.map(t => `❤${t.likes} "${t.text?.slice(0,60)}"`));
       setViralTweets(tweets);
       setViralThreads(threads);
       setViralLoading(false);
@@ -545,7 +551,7 @@ export function Generate() {
 
   useEffect(() => {
     if (!persona) return;
-    const sys = buildSystemPrompt(persona, effectiveSettings, algoData);
+    const sys = buildSystemPrompt(persona, effectiveSettings, algoData, db.getTweets());
     const user = buildUserMessage({
       topic: topic || '(konu girilmedi)',
       persona, settings: effectiveSettings,
@@ -565,37 +571,17 @@ export function Generate() {
     setTimeout(() => setPromptCopied(false), 3000);
   }, [topic, copyPrompt]);
 
-  // ── xquik compose → refine → score pipeline ─────────────────────────────────
-  const handleXquikGenerate = useCallback(async () => {
-    if (!topic.trim() || !settings.xquikKey) return;
-    setXquikLoading(true); setError(''); setXquikResults([]); setResults([]); setThread(null);
-    try {
-      const res = await xquikApi.composeTweetPipeline(settings.xquikKey, topic, {
-        count: variations,
-        goal,
-        persona: personaId,
-        lang: 'tr',
-      });
-      if (res.length === 0) {
-        setError('xquik pipeline boş döndü — compose endpoint bu konuyu desteklemiyor olabilir.');
-      } else {
-        setXquikResults(res);
-      }
-    } catch (e: any) {
-      setError(e.message || 'xquik pipeline hatası.');
-    }
-    setXquikLoading(false);
-  }, [topic, settings.xquikKey, variations, goal, personaId]);
-
   // ── Direkt üret — Claude API ile ────────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!topic.trim() || !settings.claudeKey) return;
     setLoading(true); setError(''); setResults([]); setThread(null);
 
-    const sys = buildSystemPrompt(persona, effectiveSettings, algoData);
+    const sys = buildSystemPrompt(persona, effectiveSettings, algoData, db.getTweets());
+    console.info('[generate] viralTweets sayısı:', viralTweets.length, '| mod:', mode);
 
     if (mode === 'thread') {
-      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets: viralThreads });
+      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets });
+      console.info('[thread] viralBlock var mı:', viralTweets.length > 0, '| prompt uzunluğu:', user.length);
       try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
       catch (e: any) { setError(e.message || 'Claude API hatası.'); }
     } else {
@@ -614,16 +600,6 @@ export function Generate() {
       engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
     });
     if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, tweet.text, topic);
-  };
-
-  const handleSaveXquikTweet = (text: string) => {
-    const pct = xquikResults.find(r => r.text === text)?.score?.total ?? 0;
-    db.saveTweet({
-      text, topic, persona: personaId, impressionType,
-      score: pct, scores: {}, scoreReason: 'xquik compose pipeline',
-      engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
-    });
-    if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, text, topic);
   };
 
   return (
@@ -882,7 +858,7 @@ export function Generate() {
           {/* ── Claude: Direkt Üret ── */}
           <button
             onClick={handleGenerate}
-            disabled={!topic.trim() || loading || xquikLoading || !settings.claudeKey}
+            disabled={!topic.trim() || loading || !settings.claudeKey}
             className="w-full py-3 rounded-xl bg-accent hover:bg-accent/90 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-bold transition-all shadow-lg shadow-accent/20 hover:shadow-xl hover:shadow-accent/30 active:scale-[0.98]"
           >
             {loading ? (
@@ -897,35 +873,6 @@ export function Generate() {
               </span>
             )}
           </button>
-
-          {/* ── xquik pipeline ── (her zaman görünür, xquik key varsa aktif) */}
-          <button
-            onClick={handleXquikGenerate}
-            disabled={!topic.trim() || xquikLoading || loading || !settings.xquikKey}
-            className="w-full py-3 rounded-xl border border-accent/30 bg-accent/[0.08] hover:bg-accent/[0.14] disabled:opacity-30 disabled:cursor-not-allowed text-accent text-sm font-bold transition-all active:scale-[0.98]"
-          >
-            {xquikLoading ? (
-              <span className="flex items-center justify-center gap-2">
-                <span className="w-3.5 h-3.5 border-2 border-accent/30 border-t-accent rounded-full animate-spin" />
-                xquik üretiyor...
-              </span>
-            ) : (
-              <span className="flex items-center justify-center gap-2">
-                <span>🔮</span>
-                xquik Pipeline ile Üret
-              </span>
-            )}
-          </button>
-          {!settings.xquikKey && (
-            <p className="text-[9px] text-center text-[#3a3a45]">xquik pipeline için Ayarlar'dan xquik key ekle</p>
-          )}
-
-          {/* ── Ayırıcı ── */}
-          <div className="flex items-center gap-2 py-0.5">
-            <div className="h-px flex-1 bg-white/[0.05]" />
-            <span className="text-[9px] text-[#3a3a45] uppercase tracking-widest">veya</span>
-            <div className="h-px flex-1 bg-white/[0.05]" />
-          </div>
 
           {/* ── Prompt Al ── */}
           <button
@@ -969,16 +916,15 @@ export function Generate() {
         <div className="flex items-center justify-between mb-5">
           <TimingBadge />
           <div className="flex items-center gap-2">
-            {(results.length > 0 || xquikResults.length > 0 || thread) && (
+            {(results.length > 0 || thread) && (
               <button
-                onClick={() => { setResults([]); setXquikResults([]); setThread(null); setError(''); }}
+                onClick={() => { setResults([]); setThread(null); setError(''); }}
                 className="text-[10px] text-[#4a4a55] hover:text-[#8b8b96] transition-colors px-2 py-0.5 rounded-lg hover:bg-white/[0.04]"
               >
                 ✕ Temizle
               </button>
             )}
             {results.length > 0 && <span className="text-xs text-[#6b6b72]">{results.length} varyasyon</span>}
-            {xquikResults.length > 0 && <span className="text-xs text-accent/60">{xquikResults.length} xquik sonuç</span>}
           </div>
         </div>
 
@@ -992,38 +938,6 @@ export function Generate() {
         )}
 
         {/* xquik loading */}
-        {xquikLoading && (
-          <div className="space-y-3 mb-3">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-              <span className="text-xs text-accent/70">xquik compose → refine → score çalışıyor...</span>
-            </div>
-            {[...Array(variations)].map((_, i) => (
-              <SkeletonCard key={i} />
-            ))}
-          </div>
-        )}
-
-        {/* xquik sonuçları */}
-        {!xquikLoading && xquikResults.length > 0 && (
-          <div className="space-y-3 mb-5">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-semibold text-accent/80 uppercase tracking-widest">xquik Pipeline</span>
-              <div className="h-px flex-1 bg-accent/10" />
-            </div>
-            {xquikResults.map((r, i) => (
-              <XquikResultCard
-                key={i}
-                result={r}
-                index={i}
-                xquikKey={settings.xquikKey}
-                twitterUsername={effectiveSettings.twitterUsername}
-                onSave={handleSaveXquikTweet}
-              />
-            ))}
-          </div>
-        )}
-
         {/* Loading skeletons */}
         {loading && (
           <div className="space-y-3">

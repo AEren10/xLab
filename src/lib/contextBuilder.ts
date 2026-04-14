@@ -38,7 +38,8 @@ interface BuildContextParams {
 export function buildSystemPrompt(
   persona: any,
   settings: Settings,
-  algoData?: ComposeAlgoData | null
+  algoData?: ComposeAlgoData | null,
+  savedTweets?: TweetEntry[]
 ): string {
   const styleRules = (persona?.style_rules || [])
     .map((r: string) => `- ${r}`)
@@ -57,6 +58,19 @@ export function buildSystemPrompt(
         `  "${t.text}" (${t.engagement_rate}% engagement)`
     )
     .join('\n');
+
+  // Hook hafızası: Arşiv'den en iyi 3 tweet (engagement skoruna göre)
+  const hookMemory = savedTweets && savedTweets.length > 0
+    ? [...savedTweets]
+        .sort((a, b) => {
+          const ea = (a.engagement?.like || 0) + (a.engagement?.reply || 0) * 5 + (a.engagement?.rt || 0) * 2;
+          const eb = (b.engagement?.like || 0) + (b.engagement?.reply || 0) * 5 + (b.engagement?.rt || 0) * 2;
+          return eb - ea;
+        })
+        .slice(0, 3)
+        .map((t) => `  "${t.text}"`)
+        .join('\n')
+    : '';
 
   const toneNote = settings.toneProfile
     ? `\n## Özel Ton Notu (ÖNCE BU)\n${settings.toneProfile}\n`
@@ -109,20 +123,19 @@ ${hookExamples}
 
 ### Best Performing Examples
 ${bestTweets}
-
+${hookMemory ? `\n### Senin En İyi Tweetlerin (kendi tarzın — birebir kopyalama yok, dinamiği al)\n${hookMemory}` : ''}
 ## Output Format
 Return ONLY a JSON array. No markdown fences, no explanation:
 [
   {
     "text": "tweet text",
     "scores": {
-      "hook": 0-22,
-      "information": 0-18,
-      "reply_potential": 0-15,
-      "dwell_potential": 0-10,
+      "hook": 0-20,
+      "reply_potential": 0-25,
+      "dwell_potential": 0-18,
+      "information": 0-15,
       "algorithm": 0-12,
-      "persona": 0-12,
-      "originality": 0-11
+      "persona": 0-10
     },
     "total_score": 0-100,
     "score_reason": "one sentence explanation"
@@ -130,9 +143,9 @@ Return ONLY a JSON array. No markdown fences, no explanation:
 ]
 
 ## Scoring Notes
-- dwell_potential: Kaç kişi 2+ dakika okur? Uzun/thread/data/story = yüksek. Kısa hot take = düşük.
-- hook: İlk cümle 3 saniyede scroll durduruyor mu? Zayıf hook = dwell 0 demek.
-- reply_potential: Soru veya açık uç var mı? reply_engaged_by_author = like'ın 150 katı.
+- reply_potential (25 puan — EN KRİTİK): İlk cümle reply daveti açıyor mu? Soru, gerilim, açık uç. reply_engaged_by_author = like'ın 150 katı. Reply almayan tweet algoritmada görünmez.
+- dwell_potential (18 puan): Kaç kişi 2+ dakika okur? Uzun/thread/data/story = yüksek. Kısa hot take = düşük. +10 Grok sinyali.
+- hook (20 puan): İlk cümle 3 saniyede scroll durduruyor mu? Zayıf hook = dwell 0 demek.
 - algorithm: Hashtag yok, emoji yok, em dash yok, link reply'da. Tüm Grok kurallarına uyuyor mu?`;
 }
 
@@ -188,9 +201,9 @@ export function buildUserMessage(params: BuildContextParams): string {
       .join('\n') || 'No trends available';
 
   const lengthGuide: Record<string, string> = {
-    short: '140-200 characters',
-    standard: '200-280 characters',
-    extended: '280-500 characters',
+    short:    'MAKSIMUM 160 karakter. Tek güçlü cümle. 160yi geçme.',
+    standard: '180-240 karakter arası. 240yi geçme.',
+    extended: '260-480 karakter arası. 480yi geçme. (Premium)',
   };
 
   const premiumNote = settings.hasPremium === false
@@ -214,17 +227,30 @@ export function buildUserMessage(params: BuildContextParams): string {
 
   const viralBlock = (() => {
     if (!viralTweets || viralTweets.length === 0) return '';
-    return `## Bu Konuda Tutmuş Tweetler (xquik — son 48 saat)
-Aşağıdaki tweetler bu konuda yüksek etkileşim almış. Neden tuttuklarını analiz et:
-- Hook nasıl kurulmuş?
-- Hangi duyguya/merak'a dokunuyor?
-- Yapı nasıl?
-Benzer enerjiyi yakala ama birebir kopyalama, persona kurallarına göre yeniden yaz.
+    const sorted = [...viralTweets].sort((a, b) =>
+      (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2)
+    );
+    const top = sorted.slice(0, 5);
+    const dominant = top[0];
+    const dominantTone = dominant.likes > 500
+      ? 'Bu kitle öfkeli/heyecanlı — aynı enerjiyle yaz.'
+      : dominant.replies > dominant.likes
+      ? 'Bu kitle tartışmak istiyor — reply çeken soru veya iddia at.'
+      : 'Bu kitle bilgi arıyor — güçlü bir bilgi/insight ver.';
 
-${viralTweets
-  .slice(0, 4)
-  .map((t) => `@${t.authorHandle} (❤${t.likes} 💬${t.replies} 🔁${t.retweets}):\n"${t.text}"`)
-  .join('\n\n')}`;
+    return `## ZORUNLU: Bu Konuda Gerçekten Tutan Tweetler
+İnsanlar BUNLARI paylaşıyor. Senin tweetin de bu enerjiyi taşımalı.
+${dominantTone}
+
+Şu adımları uygula:
+1. En çok tutan tweete bak: İlk kelime ne? Ton ne? Soru mu, suçlama mı, itiraf mı?
+2. O tonu ve o ilk cümle yapısını al. Konuyu farklı aç ama AYNI hissi ver.
+3. Birebir kopyalama yok — ama daha güçsüz de yazma. En az bu kadar sert/çarpıcı ol.
+
+${top.map((t, i) => {
+  const eng = t.likes + t.replies * 5 + t.retweets * 2;
+  return `[${i + 1}] Skor:${eng} (❤${t.likes} 💬${t.replies||0} 🔁${t.retweets||0})\n"${t.text}"`;
+}).join('\n\n')}`;
   })();
 
   return `## Task
@@ -283,24 +309,23 @@ export function buildCopyPrompt(
 
   const viralBlock = (() => {
     if (!viralTweets || viralTweets.length === 0) return '';
-    return `## Bu Konuda Tutmuş Tweetler (xquik — son 48 saat)
-Aşağıdaki tweetler bu konuda yüksek etkileşim almış. Neden tuttuklarını analiz et:
-- Hook nasıl kurulmuş?
-- Hangi duyguya/merak'a dokunuyor?
-- Yapı nasıl?
-Benzer enerjiyi yakala ama birebir kopyalama, persona kurallarına göre yeniden yaz.
+    const sorted = [...viralTweets].sort((a, b) =>
+      (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2)
+    );
+    return `## Bu Konuda En Çok Tutulan Tweetler (son 72 saat)
+Bu tweetler viral oldu. Neden tuttuğunu analiz et, örüntüyü çıkar, aynı dinamikle yaz.
 
-${viralTweets
-  .slice(0, 4)
-  .map((t) => `@${t.authorHandle} (❤${t.likes} 💬${t.replies} 🔁${t.retweets}):\n"${t.text}"`)
-  .join('\n\n')}`;
+${sorted.slice(0, 5).map((t, i) => {
+  const eng = t.likes + t.replies * 5 + t.retweets * 2;
+  return `[${i + 1}] Skor:${eng} (❤${t.likes} 💬${t.replies} 🔁${t.retweets})\n"${t.text}"`;
+}).join('\n\n')}`;
   })();
 
   return `Sen bir X/Twitter içerik uzmanısın. Türkçe tweet üretiyorsun.
 ${algoSection}
 ${personaLine}${toneNote}
 OUTPUT FORMAT — SADECE bu JSON'u yaz, hiç açıklama ekleme:
-[{"text":"tweet metni","scores":{"hook":0-22,"reply_potential":0-15,"dwell_potential":0-10},"total_score":0-100,"score_reason":"tek cümle"}]
+[{"text":"tweet metni","scores":{"hook":0-20,"reply_potential":0-25,"dwell_potential":0-18,"information":0-15,"algorithm":0-12,"persona":0-10},"total_score":0-100,"score_reason":"tek cümle"}]
 
 ---
 
@@ -315,43 +340,50 @@ HATIRLATMA: Sadece JSON array döndür. Markdown code block kullanma. Açıklama
  * Yapı: Hook → 2-3 content tweet → CTA.
  */
 export function buildThreadMessage(params: BuildContextParams): string {
-  const { topic, settings, radarItems, goal, xUserTweets, recentTweets, viralTweets: viralThreads } = params;
-  const topTweet = (xUserTweets && xUserTweets.length > 0)
-    ? xUserTweets.sort((a, b) => (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2))[0]
-    : recentTweets[0];
-  const topTweetNote = topTweet
-    ? `\n## En İyi Tweeti (bunu model al)\n"${topTweet.text?.slice(0, 120)}..."\n`
-    : '';
+  const { topic, settings, radarItems, goal, xUserTweets, recentTweets, viralTweets } = params;
 
-  const trends =
-    radarItems
-      .slice(0, 3)
-      .map((r) => `- ${r.title}`)
-      .join('\n') || 'No trends available';
-
+  const trends = radarItems.slice(0, 3).map((r) => `- ${r.title}`).join('\n') || '';
   const premiumNote = settings.hasPremium === false
     ? 'FREE hesap: Link tweet içine yazma, reply\'a yaz.'
     : 'Premium: Link ve extended içerik kullanılabilir.';
 
-  return `## Task
-"${topic}" konusunda 4-5 tweet'lik bir thread üret.
+  // Viral tweetler — konuda gerçekten tutunanlar, etkileşime göre sıralı
+  const viralBlock = viralTweets && viralTweets.length > 0
+    ? `\n## Bu Konuda Tutmuş Tweetler (ZORUNLU OKUMA — thread bunları referans alsın)\n` +
+      `Gündem nereye gidiyor, insanlar ne konuşuyor — bunu anla, thread yapısını buna göre kur:\n` +
+      [...viralTweets]
+        .sort((a, b) => (b.likes + (b.replies||0)*5 + (b.retweets||0)*2) - (a.likes + (a.replies||0)*5 + (a.retweets||0)*2))
+        .slice(0, 5)
+        .map((t, i) => {
+          const eng = t.likes + (t.replies||0)*5 + (t.retweets||0)*2;
+          return `[${i+1}] @${t.authorHandle} · Skor:${eng} (❤${t.likes} 💬${t.replies||0} 🔁${t.retweets||0})\n"${t.text}"`;
+        })
+        .join('\n\n')
+    : '';
+
+  // Kendi hesabın — varsa en iyi tweeti referans al
+  const topOwnTweet = xUserTweets && xUserTweets.length > 0
+    ? [...xUserTweets].sort((a, b) => (b.likes + b.replies*5 + b.retweets*2) - (a.likes + a.replies*5 + a.retweets*2))[0]
+    : recentTweets[0];
+  const ownTweetNote = topOwnTweet
+    ? `\n## Kendi En İyi Tweetin (ses tonunu koru)\n"${topOwnTweet.text?.slice(0, 120)}"\n`
+    : '';
+
+  return `## Görev
+"${topic}" konusunda 4-5 tweet'lik thread üret.
 
 ## Thread Yapısı
-1. Hook tweet — scroll durduracak, merak uyandıracak ilk cümle. Soru veya şaşırtıcı stat.
-2-3. Content tweet(ler) — asıl değeri ver. Her tweet bağımsız okunabilir olsun.
-4-5. CTA tweet — "bunu bookmarkla", "dene", soru sor — reply çek.
+1. Hook — scroll durduran, merak yaratan, okutturan ilk cümle
+2-3. İçerik — asıl değeri ver, her tweet bağımsız okunabilir
+4-5. CTA — soru sor, reply çek, bookmark istemine yönlendir
 
 ## Kurallar
-- Her tweet 180-260 karakter (hızlı okunuyor)
+- Her tweet 180-260 karakter
 - Türkçe, hashtag yok, emoji yok
-- Thread içinde aynı kelimeyi tekrarlama
-- Her tweet bir sonrakini merak ettirmeli
+- Her tweet sonrakini merak ettirmeli
 - ${premiumNote}
-- Goal: ${goal}
-
-## Güncel Trendler (ilgili varsa kullan)
-${trends}
-${topTweetNote}${viralThreads && viralThreads.length > 0 ? `\n## Bu Konuda Tutmuş Thread'ler (ilham al, kopyalama)\n${viralThreads.slice(0, 3).map((t) => `@${t.authorHandle} (❤${t.likes}, ${t.totalTweets} tweet):\n"${t.firstTweet}"`).join('\n\n')}\n` : ''}
+- Hedef: ${goal}
+${trends ? `\n## Radar Gündem\n${trends}` : ''}${viralBlock}${ownTweetNote}
 ## Output Format — SADECE bu JSON, markdown yok:
 {
   "tweets": [

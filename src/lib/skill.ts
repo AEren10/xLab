@@ -151,13 +151,12 @@ AI DİL YASAK: "delve", "tapestry", "nuanced", "son derece", bullet-list tweet, 
 `.trim();
 
 export const SCORING_CRITERIA = {
-  hook:            { weight: 22, label: 'Hook Gücü',         description: 'İlk cümle scroll durduruyor mu? 3 saniye kuralı.' },
-  information:     { weight: 18, label: 'Bilgi Değeri',       description: 'Spesifik insight, stat veya taze bakış açısı var mı?' },
-  reply_potential: { weight: 15, label: 'Reply Potansiyeli',  description: 'Soru veya açık uç var mı? reply_engaged = like\'ın 150 katı.' },
-  dwell_potential: { weight: 10, label: 'Dwell Time',         description: '2+ dakika okutabilir mi? Scroll pass riski nedir?' },
+  hook:            { weight: 20, label: 'Hook Gücü',         description: 'İlk cümle scroll durduruyor mu? 3 saniye kuralı.' },
+  reply_potential: { weight: 25, label: 'Reply Daveti',       description: 'Soru, gerilim veya açık uç var mı? reply_engaged = like\'ın 150 katı. EN KRİTİK.' },
+  dwell_potential: { weight: 18, label: 'Dwell Time',         description: '2+ dakika okutabilir mi? Scroll pass riski nedir? +10 Grok sinyali.' },
+  information:     { weight: 15, label: 'Bilgi Değeri',       description: 'Spesifik insight, stat veya taze bakış açısı var mı?' },
   algorithm:       { weight: 12, label: 'Algoritma Uyumu',    description: 'Hashtag/emoji yok, AI dili yok, link reply\'da mı?' },
-  persona:         { weight: 12, label: 'Persona Eşleşmesi',  description: 'Seçilen persona tonu ve diline uyuyor mu?' },
-  originality:     { weight: 11, label: 'Özgünlük',           description: 'Taze açı mı? Klişe mi? Bookmark alır mı?' },
+  persona:         { weight: 10, label: 'Persona Eşleşmesi',  description: 'Seçilen persona tonu ve diline uyuyor mu?' },
 };
 
 export const TIMING_SLOTS = [

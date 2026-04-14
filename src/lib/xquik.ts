@@ -13,7 +13,7 @@
  * Response mapping: xquik API farklı field isimleri dönebileceği için
  * (tweets vs items, likes vs favoriteCount vb.) birden fazla alternatif kontrol edilir.
  */
-const BASE = 'https://xquik.com/api/v1';
+const BASE = '/xquik';
 
 const headers = (apiKey: string) => ({
   'Content-Type': 'application/json',
@@ -177,10 +177,18 @@ export const xquikApi = {
       const res = await fetch(`${BASE}/radar?limit=${limit}`, {
         headers: headers(apiKey),
       });
-      if (!res.ok) return [];
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`[xquik] radar ${res.status}:`, body);
+        return [];
+      }
       const data = await res.json();
-      return data.items || [];
-    } catch {
+      const arr = data.items ?? data.results ?? data.data ?? data.trending ?? data.feed ?? data.topics ?? data.radar ?? null;
+      const list: any[] = Array.isArray(arr) ? arr : Array.isArray(data) ? data : [];
+      // xquik "description" döndürüyor, uygulama "title" bekliyor — normalize et
+      return list.map((item) => ({ ...item, title: item.title || item.description || item.name || '' }));
+    } catch (e) {
+      console.error('[xquik] radar fetch error:', e);
       return [];
     }
   },
@@ -266,27 +274,35 @@ export const xquikApi = {
   ): Promise<TweetSearchResult[]> {
     if (!apiKey) return [];
     try {
-      const { minFaves = 50, minReplies = 5, lang = 'tr', hours = 2, limit = 10 } = options;
-      const res = await fetch(`${BASE}/x/tweets/search`, {
-        method: 'POST',
+      const { minFaves = 10, lang = 'tr' } = options;
+      // GET endpoint — sadece q parametresi, X search operatörleriyle
+      let q = query;
+      if (lang) q += ` lang:${lang}`;
+      if (minFaves > 0) q += ` min_faves:${minFaves}`;
+      const params = new URLSearchParams({ q });
+      const res = await fetch(`${BASE}/x/tweets/search?${params}`, {
         headers: headers(apiKey),
-        body: JSON.stringify({ query, minFaves, minReplies, lang, hours, limit }),
       });
-      if (!res.ok) return [];
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`[xquik] searchTweets ${res.status}:`, body);
+        return [];
+      }
       const data = await res.json();
-      return (data.tweets || data.items || []).map((t: any) => ({
+      return (data.tweets || data.items || data.results || []).map((t: any) => ({
         id: t.id || t.tweetId || '',
         text: t.text || t.content || '',
-        author: t.author?.name || t.authorName || '',
-        authorHandle: t.author?.handle || t.authorHandle || '',
-        likes: t.likes || t.favoriteCount || 0,
-        replies: t.replies || t.replyCount || 0,
-        retweets: t.retweets || t.retweetCount || 0,
-        views: t.views || t.viewCount,
+        author: t.author?.name || t.authorName || t.user?.name || '',
+        authorHandle: t.author?.username || t.authorHandle || t.user?.username || '',
+        likes: t.likeCount || t.likes || t.favoriteCount || 0,
+        replies: t.replyCount || t.replies || 0,
+        retweets: t.retweetCount || t.retweets || 0,
+        views: t.viewCount || t.views,
         createdAt: t.createdAt || t.created_at || '',
         url: t.url || `https://x.com/i/web/status/${t.id || t.tweetId}`,
       }));
-    } catch {
+    } catch (e) {
+      console.error('[xquik] searchTweets error:', e);
       return [];
     }
   },
@@ -295,7 +311,8 @@ export const xquikApi = {
   async getTrends(apiKey: string, count = 20): Promise<TrendItem[]> {
     if (!apiKey) return [];
     try {
-      const res = await fetch(`${BASE}/x/trends?count=${count}`, {
+      // woeid=23424969 → Türkiye
+      const res = await fetch(`${BASE}/x/trends?woeid=23424969`, {
         headers: headers(apiKey),
       });
       if (!res.ok) return [];
@@ -472,56 +489,44 @@ export const xquikApi = {
   // xquik'in gündem araçlarından gelen harici trend verileri.
   // Her biri kendi endpoint'inden çekilir; hata olursa boş dizi döner.
   async getExternalTrends(apiKey: string): Promise<ExternalTrends> {
-    const empty: ExternalTrends = { reddit: [], hackernews: [], google: [] };
-    if (!apiKey) return empty;
+    if (!apiKey) return { reddit: [], hackernews: [], google: [] };
+    // Radar endpoint'i source filtresiyle kullanılıyor
+    const toItem = (i: any) => ({ title: i.title || i.description || '', url: i.url, score: i.score });
     try {
       const [redditRes, hnRes, googleRes] = await Promise.allSettled([
-        fetch(`${BASE}/reddit/trends`, { headers: headers(apiKey) }),
-        fetch(`${BASE}/hackernews/trends`, { headers: headers(apiKey) }),
-        fetch(`${BASE}/google/trends`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/radar?source=reddit&limit=6`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/radar?source=hacker_news&limit=6`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/radar?source=google_trends&limit=6`, { headers: headers(apiKey) }),
       ]);
-      const reddit = (redditRes.status === 'fulfilled' && redditRes.value.ok)
-        ? ((await redditRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
-            title: i.title || i.name || '',
-            url: i.url,
-            score: i.score || i.ups,
-            subreddit: i.subreddit,
-          }))
-        : [];
-      const hackernews = (hnRes.status === 'fulfilled' && hnRes.value.ok)
-        ? ((await hnRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
-            title: i.title || '',
-            url: i.url,
-            score: i.score || i.points,
-            comments: i.comments,
-          }))
-        : [];
-      const google = (googleRes.status === 'fulfilled' && googleRes.value.ok)
-        ? ((await googleRes.value.json()).items || []).slice(0, 8).map((i: any) => ({
-            keyword: i.keyword || i.title || i.name || '',
-            interest: i.interest,
-          }))
-        : [];
+      const parse = async (r: PromiseSettledResult<Response>) => {
+        if (r.status !== 'fulfilled' || !r.value.ok) return [];
+        const d = await r.value.json();
+        return (d.items || []).slice(0, 6).map(toItem);
+      };
+      const [reddit, hackernews, google] = await Promise.all([parse(redditRes), parse(hnRes), parse(googleRes)]);
       return { reddit, hackernews, google };
     } catch {
-      return empty;
+      return { reddit: [], hackernews: [], google: [] };
     }
   },
 
   // ── Dizi Çıkarıcı — konuya göre başarılı thread'leri bul ──────────────────
   // Thread modu için ilham kaynağı: hook yapısı, içerik akışı, CTA örnekleri.
   async searchThreads(
-    apiKey: string,
-    query: string,
-    options: { lang?: string; hours?: number; limit?: number } = {}
+    _apiKey: string,
+    _query: string,
+    _options: { lang?: string; hours?: number; limit?: number } = {}
   ): Promise<ThreadResult[]> {
-    if (!apiKey) return [];
+    // /x/threads/search 404 döndürüyor — xquik'te bu endpoint yok, devre dışı.
+    return [];
+    // eslint-disable-next-line no-unreachable
+    if (!_apiKey) return [];
     try {
-      const { lang = 'tr', hours = 72, limit = 5 } = options;
+      const { lang = 'tr', hours = 72, limit = 5 } = _options;
       const res = await fetch(`${BASE}/x/threads/search`, {
         method: 'POST',
-        headers: headers(apiKey),
-        body: JSON.stringify({ query, lang, hours, limit }),
+        headers: headers(_apiKey),
+        body: JSON.stringify({ query: _query, lang, hours, limit }),
       });
       if (!res.ok) return [];
       const data = await res.json();
@@ -592,13 +597,39 @@ export const xquikApi = {
     return all.filter(Boolean) as XquikTweetResult[];
   },
 
+  // ── Account & Credits ────────────────────────────────────────────────────────
+  async getAccountInfo(apiKey: string): Promise<{ subscription?: string; credits?: number; creditsUsed?: number; email?: string } | null> {
+    if (!apiKey) return null;
+    try {
+      const [accRes, credRes] = await Promise.all([
+        fetch(`${BASE}/account`, { headers: headers(apiKey) }),
+        fetch(`${BASE}/credits`, { headers: headers(apiKey) }),
+      ]);
+      const acc = accRes.ok ? await accRes.json() : {};
+      const cred = credRes.ok ? await credRes.json() : {};
+      return {
+        email: acc.email || acc.user?.email,
+        subscription: acc.subscription?.plan || acc.plan || (acc.subscriptionStatus === 'active' ? 'active' : 'none'),
+        credits: cred.balance ?? cred.credits ?? cred.remaining,
+        creditsUsed: cred.used ?? cred.creditsUsed,
+      };
+    } catch {
+      return null;
+    }
+  },
+
   // ── API Key Test ─────────────────────────────────────────────────────────────
   async testKey(apiKey: string): Promise<boolean> {
     if (!apiKey) return false;
     try {
       const res = await fetch(`${BASE}/radar?limit=1`, { headers: headers(apiKey) });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.error(`[xquik] testKey ${res.status}:`, body);
+      }
       return res.ok;
-    } catch {
+    } catch (e) {
+      console.error('[xquik] testKey error:', e);
       return false;
     }
   },
@@ -613,25 +644,24 @@ export const xquikApi = {
   ): Promise<UserTweet[]> {
     if (!apiKey || !username) return [];
     try {
-      const res = await fetch(`${BASE}/x/tweets/search`, {
-        method: 'POST',
+      const clean = username.replace(/^@/, '');
+      // GET /x/users/{username}/tweets
+      const res = await fetch(`${BASE}/x/users/${clean}/tweets?resultsLimit=${limit}`, {
         headers: headers(apiKey),
-        body: JSON.stringify({
-          query: `from:${username}`,
-          limit,
-          includeEngagement: true,
-        }),
       });
-      if (!res.ok) return [];
+      if (!res.ok) {
+        console.error(`[xquik] getUserTweets ${res.status}`);
+        return [];
+      }
       const data = await res.json();
-      return (data.tweets || data.items || []).map((t: any) => ({
-        id: t.id || t.tweetId || '',
-        text: t.text || t.content || '',
-        likes: t.likes || t.favoriteCount || 0,
-        replies: t.replies || t.replyCount || 0,
-        retweets: t.retweets || t.retweetCount || 0,
-        views: t.views || t.viewCount,
-        createdAt: t.createdAt || t.created_at || '',
+      return (data.tweets || data.items || data.results || []).map((t: any) => ({
+        id: t.id || '',
+        text: t.text || '',
+        likes: t.likeCount ?? t.likes ?? t.favoriteCount ?? 0,
+        replies: t.replyCount ?? t.replies ?? 0,
+        retweets: t.retweetCount ?? t.retweets ?? 0,
+        views: t.viewCount ?? t.views,
+        createdAt: t.createdAt || '',
       }));
     } catch {
       return [];
