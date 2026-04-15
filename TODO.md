@@ -16,7 +16,7 @@ Bu urun artik sadece "tweet ureten" bir arac degil. Kendi kendini besleyen bir l
 - Reply tarafinda uzunluk modu, otomatik retry ve skor kontrolu calisiyor.
 - Kaydedilen iyi sonuclar History ve Analytics tarafinda geri izlenebiliyor.
 
-**Stil:** alperk55 tabani, mizahi ve hafif alayci. Amac tarafsiz gorunup yorum cektirmek.
+**Stil:** alperk55 tabani, tarafsiz gorun / taraf ima et, yorum cektir.
 
 **Teknik yigin:** React + TypeScript + Vite + Tailwind. Claude API ve xquik API birlikte calisiyor. localStorage ve sessionStorage ile kalici hafiza var.
 
@@ -28,43 +28,43 @@ Bu urun artik sadece "tweet ureten" bir arac degil. Kendi kendini besleyen bir l
 
 ### Generate
 
-- `Generate.tsx`
-  - konu expansion
-  - ilham tweetlerinde topic + hook kilidi
-  - xquik skoruna gore yeniden siralama
-  - thread icin dis skor gostergesi
-- Kendi hesabindan gelen son tweetler persona icine karisiyor.
-- Persona refresh yapildiginda en iyi performansli ilk 5 tweet baz aliniyor.
+- konu expansion
+- ilham tweetlerinde topic + hook kilidi
+- xquik skoruna gore yeniden siralama
+- thread icin dis skor gostergesi
+- hours filtresi (24s / 48s / 72s) — since: operatoru ile API'a gidiyor
+- ilham tweetleri: yuksek etkileşimden dusuge siralama, 0 begeni filtreleniyor, max 20 tweet
+- kart tarih/sure gosterimi (30dk / 5sa / 2g) — Twitter formatini dogru parse ediyor
 
 ### Replies
 
-- `Replies.tsx`
-  - reply uzunluk modu: kisa / standart / uzun
-  - otomatik tekrar deneme
-  - konuya yakin ilham tweet secimi
-  - persona cache ile kalici ses ogrenmesi
-- Reply ilk denemede tweeti ozetliyorsa tekrar dener.
-- Konudan cok "brief" mantigi var: reaksiyon, nuans, karsi gorus, mizah gibi.
+- reply uzunluk modu: kisa / standart / uzun
+- otomatik tekrar deneme
+- konuya yakin ilham tweet secimi
+- persona cache ile kalici ses ogrenmesi
+- persona secici (her iki sekmede)
+- hours filtresi
+- Arama sekmesi + Izlenen Hesaplar sekmesi
+- Izlenen hesaplar: lemarcaspors_, bosunatiklama, demarkesports, futbolarena (varsayilan)
+- reply promtu: sadece ilgili tweete tepki ver, konu tangent yok, soru ile bitirme
 
 ### Persona
 
-- `persona.ts`
-  - en iyi performansli ilk 5 tweetten ogrenme
-  - learning signature ile gereksiz cache yazmayi engelleme
-- `buildPersonaFromTweets` artik top 5 tweet uzerinden calisiyor.
+- en iyi performansli ilk 5 tweetten ogrenme
+- learning signature ile gereksiz cache yazmayi engelleme
+- alperk55: tarafsiz gorun, taraf ima et, yorum cektir
 
 ### Guide
 
-- `Guide.tsx`
-  - guncel sistem akisi
-  - reply uzunluk / retry mantigi
-  - persona yenile akisi
+- guncel sistem akisi
+- reply uzunluk / retry mantigi
+- persona yenile akisi
 
 ---
 
 ## Tamamlananlar
 
-- Persona sistemi (hurricane + ozel JSON'lar)
+- Persona sistemi (hurricane + ozel JSON'lar + alperk55)
 - Claude API entegrasyonu + copy-paste fallback
 - xquik algo data (canli Grok verisi, static fallback)
 - Thread uretimi (Hook -> Icerik -> CTA)
@@ -83,6 +83,14 @@ Bu urun artik sadece "tweet ureten" bir arac degil. Kendi kendini besleyen bir l
 - persona cache persist ve refresh akisi
 - reply length + retry akisi
 - responsive shell ve panel stack guncellemesi
+- [object Object] bug duzeltildi (contentRules mapping)
+- viralBlock talimati guclendirildi (birebir yapi taklit et)
+- buildReplyPrompt sadeleştirildi (konu tangent ve soru bitis durduruldu)
+- Twitter tarih formati parse duzeltildi (parseTwitterDate — Wed Apr 15...)
+- Inspiration kart tarih gosterimi her zaman gorunur
+- hours filtresi API'a since: operatoru olarak gidiyor
+- Persona secici Replies her iki sekmesinde
+- alperk55 persona JSON olusturuldu
 
 ---
 
@@ -99,51 +107,47 @@ Bu urun artik sadece "tweet ureten" bir arac degil. Kendi kendini besleyen bir l
 
 ## Kritik - Siradaki
 
-### 1. Oto feedback loop - daha da kuvvetli hale getir
+### 1. Tweet kalitesi — ilham secimi iyilestirmesi
+- Viral tweetler konu yakinligi + hook tipi birlikte agirliklansin.
+- Simdi sadece genel populerlik baskın geliyor, konu alakasizligi var.
+- rankContextualTweets daha agresif hook tipine baksin.
+
+### 2. Oto feedback loop - daha da kuvvetli
 - Kullanici tweet attiktan sonra gercek performansi cek.
-- Tutmus tweetleri otomatik persona cache'e geri yaz.
-- Ama bunu sadece "attim" bazinda degil, "tuttu" bazinda yap.
+- Tutmus tweetleri otomatik persona cache'e geri yaz ("attim" degil "tuttu" bazinda).
 
-### 2. Izlenen Hesaplar - Oto Monitor
+### 3. Izlenen Hesaplar - Oto Monitor (B plani)
 - Manuel refresh var.
-- Ileri asamada arka planda periyodik kontrol ekle.
+- Arka planda periyodik kontrol ekle.
 - Yeni tweet gelince in-app bildirim gosterebiliriz.
-
-### 3. Ilham tweet alakasizligi
-- Viral tweetler konuya gore cekiliyor ama bazen genel populerlik baskin geliyor.
-- Topic yakinligi + hook tipi birlikte agirliklansin.
-
-### 4. Ilham tweet time filter - Generate sayfasi
-- Viral tweet fetch su an saat bazli filtreye bagli.
-- Kullaniciya 24s / 48s / 72s secimi ver.
 
 ---
 
 ## Onemli
 
-### 5. Persona Builder - Coklu hesap blend
+### 4. Persona Builder - Coklu hesap blend
 - Kullanici 2-3 hesap girsin.
 - Her hesabin top tweet'leri cekilsin.
 - Claude bunlari blend edip yeni persona uretsin.
 
-### 6. xquik Compose fallback
+### 5. xquik Compose fallback
 - Claude yokken xquik compose -> refine -> score pipeline calissin.
 
-### 7. skill.ts temizleme
+### 6. skill.ts temizleme
 - Static ALGORITHM_RULES su an fallback.
-- xquik dogrulandiysa daha sonra statik kismi sadeleştirebiliriz.
+- xquik dogrulandiysa statik kismi sadeleştirebiliriz.
 
 ---
 
 ## Uzun Vade
 
-### 8. Monitoring - Golden Hour
+### 7. Monitoring - Golden Hour
 - Kendi tweet'in atilinca ilk 1 saat icinde aktif kalma bildirimi.
 - "Tweet atildi, simdi reply al, like birak" uyarisi.
 
-### 9. Viral Tweet Kutuphanesi
+### 8. Viral Tweet Kutuphanesi
 - "Bu konuda tutmus ne var?" sorusuna kalici cevap.
 - Basarili tweetleri db'ye kaydet, nis bazli filtrele.
 
-### 10. Cross-Platform
+### 9. Cross-Platform
 - Ayni tweet'i LinkedIn / Instagram formatina cevir.

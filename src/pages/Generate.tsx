@@ -1602,17 +1602,15 @@ export function Generate() {
               >
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <span className="text-[9px] font-bold text-[#3a3a48] w-4 shrink-0">{idx + 1}</span>
-                  <span className="text-[10px] font-semibold text-[#8b8b96] truncate">@{vt.authorHandle}</span>
-                  {vt.createdAt && (
-                    <span className="text-[9px] text-[#4a4a55] ml-auto shrink-0">
-                      {(() => {
-                        const diff = (Date.now() - new Date(vt.createdAt).getTime()) / 60000;
-                        if (diff < 60) return `${Math.round(diff)}dk`;
-                        if (diff < 1440) return `${Math.round(diff / 60)}sa`;
-                        return `${Math.round(diff / 1440)}g`;
-                      })()}
-                    </span>
-                  )}
+                  <span className="text-[10px] font-semibold text-[#8b8b96] truncate min-w-0">@{vt.authorHandle}</span>
+                  <span className="text-[9px] text-[#9b9ba6] ml-auto shrink-0 whitespace-nowrap">
+                    {vt.createdAt ? (() => {
+                      const diff = (Date.now() - new Date(vt.createdAt).getTime()) / 60000;
+                      if (diff < 60) return `${Math.round(diff)}dk`;
+                      if (diff < 1440) return `${Math.round(diff / 60)}sa`;
+                      return `${Math.round(diff / 1440)}g`;
+                    })() : '—'}
+                  </span>
                 </div>
 
                 {vt.mediaPreviewUrl && (

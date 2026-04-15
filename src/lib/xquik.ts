@@ -68,6 +68,27 @@ function extractMediaPreviewUrl(t: any): string | undefined {
   return undefined;
 }
 
+const MONTH_MAP: Record<string, string> = {
+  Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',
+  Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12',
+};
+
+function parseTwitterDate(raw: string | number): string {
+  if (!raw) return '';
+  const n = Number(raw);
+  if (!isNaN(n) && n > 1_000_000_000) return new Date(n < 1e12 ? n * 1000 : n).toISOString();
+  const s = String(raw);
+  // Twitter format: "Wed Apr 15 14:00:02 +0000 2026"
+  const m = s.match(/^\w{3}\s+(\w{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+\+\d{4}\s+(\d{4})$/);
+  if (m) {
+    const mo = MONTH_MAP[m[1]] || '01';
+    const day = m[2].padStart(2, '0');
+    return `${m[4]}-${mo}-${day}T${m[3]}Z`;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? '' : d.toISOString();
+}
+
 // ─── Mevcut ─────────────────────────────────────────────────────────────────
 
 export interface RadarItem {
@@ -403,14 +424,7 @@ export const xquikApi = {
         quotedAuthorHandle: quoted?.author?.username || quoted?.authorHandle || quoted?.user?.username || '',
         quotedUrl: quoted?.url || (quoted?.id ? `https://x.com/i/web/status/${quoted.id}` : ''),
         quotedMediaPreviewUrl: quoted ? extractMediaPreviewUrl(quoted) : undefined,
-        createdAt: (() => {
-          const raw = t.createdAt || t.created_at || t.timestamp || t.time || t.date || t.publishedAt || t.postedAt || t.tweetCreatedAt || '';
-          if (!raw) return '';
-          const n = Number(raw);
-          if (!isNaN(n) && n > 1000000000) return new Date(n < 1e12 ? n * 1000 : n).toISOString();
-          const d = new Date(String(raw));
-          return isNaN(d.getTime()) ? '' : d.toISOString();
-        })(),
+        createdAt: parseTwitterDate(t.createdAt || t.created_at || t.timestamp || t.time || t.date || t.publishedAt || t.postedAt || t.tweetCreatedAt || ''),
         url: t.url || `https://x.com/i/web/status/${t.id || t.tweetId}`,
         };
       });
