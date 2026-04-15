@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { TweetVariation } from '../lib/claude';
 import { claudeApi } from '../lib/claude';
 import { SCORING_CRITERIA } from '../lib/skill';
 import { scoreColor } from '../lib/utils';
 import { xquikApi } from '../lib/xquik';
 import type { XquikScore } from '../lib/xquik';
+import { inferMediaOpportunity } from '../lib/promptHeuristics';
 
 interface TweetCardProps {
   tweet: TweetVariation;
@@ -54,9 +55,14 @@ export function TweetCard({
   const [showGoldenHour, setShowGoldenHour] = useState(false);
 
   // Grok live score
-  const [liveScore, setLiveScore] = useState<XquikScore | null>(null);
+  const [liveScore, setLiveScore] = useState<XquikScore | null>(tweet.xquikScore ?? null);
   const [scoreLoading, setScoreLoading] = useState(false);
   const [showChecklist, setShowChecklist] = useState(false);
+
+  useEffect(() => {
+    setLiveScore(tweet.xquikScore ?? null);
+    setShowChecklist(Boolean(tweet.xquikScore));
+  }, [tweet.xquikScore, tweet.text]);
 
   // Direkt paylaşım
   const [postState, setPostState] = useState<'idle' | 'editing' | 'loading' | 'done' | 'error'>('idle');
@@ -75,6 +81,7 @@ export function TweetCard({
   const hasLink = /https?:\/\/\S+/i.test(tweet.text);
   const showLinkWarning = !hasPremium && hasLink;
   const dwell = estimateDwellTime(tweet.text);
+  const mediaOpportunity = inferMediaOpportunity(tweet.text, impressionType);
 
   // Kaydet sonrası görsel paneli aç
   const handleSave = () => {
@@ -132,7 +139,7 @@ export function TweetCard({
     setVisualError('');
     setVisualPrompt('');
     try {
-      const prompt = await claudeApi.generateVisualPrompt(claudeKey, tweet.text, impressionType);
+      const prompt = await claudeApi.generateVisualPrompt(claudeKey, tweet.text, impressionType, mediaOpportunity.promptHint);
       setVisualPrompt(prompt);
     } catch (e: any) {
       setVisualError(e.message || 'Görsel prompt üretilemedi.');
@@ -148,7 +155,7 @@ export function TweetCard({
   };
 
   return (
-    <div className="relative bg-card border border-white/[0.07] rounded-xl p-4 space-y-3 hover:border-white/[0.14] hover:shadow-[0_8px_32px_rgba(0,0,0,0.45)] transition-all duration-200 overflow-hidden">
+    <div className="group relative bg-card border border-white/[0.08] rounded-2xl p-4 space-y-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] hover:-translate-y-0.5 hover:border-white/[0.14] hover:shadow-[0_24px_65px_rgba(0,0,0,0.34)] transition-all duration-200 overflow-hidden">
 
       {/* Sol üst köşe: yüksek skor çizgisi */}
       {tweet.total_score >= 85 && (
@@ -162,9 +169,16 @@ export function TweetCard({
 
       {/* Skor + dwell + karakter */}
       <div className="flex items-center justify-between gap-2">
-        <span className={`text-sm font-bold px-3 py-1 rounded-full border ${scoreColor(tweet.total_score)}`}>
-          {tweet.total_score}/100
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`text-sm font-bold px-3 py-1 rounded-full border ${scoreColor(tweet.total_score)}`}>
+            {tweet.total_score}/100
+          </span>
+          {liveScore && (
+            <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${liveScore.passed ? 'text-accent-green bg-accent-green/10 border-accent-green/20' : 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20'}`}>
+              Grok {liveScore.total}/100
+            </span>
+          )}
+        </div>
         <span
           title={dwell.tip}
           className={`text-[10px] px-2 py-0.5 rounded-full border cursor-default ${
@@ -276,7 +290,7 @@ export function TweetCard({
           className="w-full flex items-center justify-between group"
         >
           <div className="flex items-center gap-2">
-            <span className="text-base">🎨</span>
+            <span className="text-base">{mediaOpportunity.format === 'video-thumbnail' ? '🎥' : '🎨'}</span>
             <span className="text-xs font-semibold text-[#8b8b96] group-hover:text-[#e8e8e0] transition-colors">
               Görsel Öneri
             </span>
@@ -309,6 +323,16 @@ export function TweetCard({
             ) : !visualPrompt ? (
               /* Key var, henüz üretilmedi */
               <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded-full border ${
+                    mediaOpportunity.format === 'video-thumbnail'
+                      ? 'bg-accent/10 text-accent border-accent/20'
+                      : 'bg-white/[0.03] text-[#8b8b96] border-white/[0.06]'
+                  }`}>
+                    {mediaOpportunity.label}
+                  </span>
+                  <span className="text-[9px] text-[#4a4a55] truncate">{mediaOpportunity.reason}</span>
+                </div>
                 <p className="text-[10px] text-[#6b6b72] leading-relaxed">
                   Bu tweet için{' '}
                   <span className="text-[#8b8b96] font-medium">

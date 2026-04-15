@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import { TweetCard } from '../components/TweetCard';
-import { RadarPanel } from '../components/RadarPanel';
-import { ExternalTrendsPanel } from '../components/ExternalTrendsPanel';
+import { InspirationSpotlight } from '../components/InspirationSpotlight';
 import { ContextPreview } from '../components/ContextPreview';
+import { PageHeader } from '../components/PageHeader';
 import { Tooltip } from '../components/Tooltip';
 import { db } from '../lib/db';
 import type { AccountProfile } from '../lib/db';
@@ -10,12 +10,18 @@ import { xquikApi } from '../lib/xquik';
 import type { RadarItem, ComposeAlgoData, UserTweet, TweetSearchResult, ExternalTrends, ThreadResult } from '../lib/xquik';
 import { claudeApi } from '../lib/claude';
 import type { TweetVariation, TweetThread } from '../lib/claude';
+import { enrichPersonaWithTweets, loadPersonaById, persistEnrichedPersona } from '../lib/persona';
 import {
   buildSystemPrompt,
   buildUserMessage,
   buildThreadMessage,
   buildCopyPrompt,
 } from '../lib/contextBuilder';
+import {
+  buildTopicSearchQueries,
+  buildTopicSearchLanguages,
+  rankContextualTweets,
+} from '../lib/promptHeuristics';
 import { getCurrentSlot } from '../lib/skill';
 
 const IMPRESSION_TYPES = [
@@ -25,6 +31,23 @@ const IMPRESSION_TYPES = [
   { id: 'Edu',      label: 'Eğitici',   tip: 'Öğretici. "Bunu bilmiyordum" bookmark oranı yüksek.' },
   { id: 'Inspire',  label: 'İlham',     tip: 'Motivasyon, bakış açısı. RT ve quote alır, reply az.' },
   { id: 'Humor',    label: 'Mizah',     tip: 'Bağlam gerektirir. Yanlış zamanda atılırsa sıfır reach.' },
+];
+
+const ANGLES = [
+  { id: 'auto',    label: 'Otomatik', tip: 'Konuya göre en uygun açı seçilsin.' },
+  { id: 'sharp',   label: 'Sivri',    tip: 'Daha sert, daha net ve daha iddialı.' },
+  { id: 'nuance',  label: 'Nüans',    tip: 'Daha dengeli ve ince bir ton.' },
+  { id: 'question', label: 'Soru',    tip: 'Reply çeken açık loop kur.' },
+  { id: 'counter', label: 'Karşı Görüş', tip: 'Küçük bir ters köşe / zıtlık ekle.' },
+  { id: 'story',   label: 'Hikaye',   tip: 'Küçük anekdot veya sahne hissi ver.' },
+];
+
+const MEDIA_MODES = [
+  { id: 'auto',    label: 'Otomatik', tip: 'Model içerikten medya biçimini seçsin.' },
+  { id: 'text',    label: 'Metin',    tip: 'Saf metin, görsel baskın olmasın.' },
+  { id: 'image',   label: 'Görsel',   tip: 'Screenshot, quote card veya infografik hissi.' },
+  { id: 'video',   label: 'Video',    tip: 'Video kapağı / clip hissiyle yaz.' },
+  { id: 'quote',   label: 'Quote',    tip: 'Alıntı tweet / reply hissi ver.' },
 ];
 
 const LENGTHS = [
@@ -40,6 +63,7 @@ const GOALS = [
 ];
 
 const VARIATIONS_OPTS = [1, 2, 3];
+const INSPIRATION_HOURS_OPTS = [4, 12, 24, 72];
 
 // Boş ekranda gösterilecek Grok algoritması ipuçları
 const ALGO_TIPS = [
@@ -164,6 +188,31 @@ const MEDIA_TIPS: Record<string, { type: string; why: string; color: string }> =
   'Humor':    { type: 'Meme / GIF',         why: 'Varsa güçlendirir, yoksa metin yeterli',                    color: 'border-accent-orange/20 text-accent-orange' },
 };
 
+async function scoreGeneratedVariations(apiKey: string, variations: TweetVariation[]): Promise<TweetVariation[]> {
+  if (!apiKey || variations.length === 0) return variations;
+
+  const scored = await Promise.all(
+    variations.map(async (tweet) => {
+      const xquikScore = await xquikApi.scoreTweet(apiKey, tweet.text);
+      return { ...tweet, xquikScore };
+    })
+  );
+
+  return scored.sort((a, b) => {
+    const aExternal = a.xquikScore?.total ?? a.total_score;
+    const bExternal = b.xquikScore?.total ?? b.total_score;
+    if (bExternal !== aExternal) return bExternal - aExternal;
+    return b.total_score - a.total_score;
+  });
+}
+
+async function scoreThreadWithXquik(apiKey: string, thread: TweetThread): Promise<TweetThread> {
+  if (!apiKey || !thread?.tweets?.length) return thread;
+  const draft = thread.tweets.map((tweet) => tweet.text).join('\n\n');
+  const xquikScore = await xquikApi.scoreTweet(apiKey, draft);
+  return { ...thread, xquikScore };
+}
+
 /**
  * MediaSuggestion — seçilen impressionType'a göre "hangi görseli ekle" önerisi.
  * Kaynak: Grok'ta photo_expand (+2) ve vqv (+2) sinyalleri ayrı ölçülüyor.
@@ -180,6 +229,105 @@ function MediaSuggestion({ impressionType }: { impressionType: string }) {
           Önerilen Görsel: {tip.type}
         </p>
         <p className="text-[10px] text-[#6b6b72] mt-0.5">{tip.why}</p>
+      </div>
+    </div>
+  );
+}
+
+/*
+function WorkbenchSnapshot({
+  topic,
+  personaId,
+  mode,
+  impressionType,
+  angle,
+  mediaMode,
+  length,
+  goal,
+  selectedExampleCount,
+  inspirationCount,
+  userTweetCount,
+}: {
+  topic: string;
+  personaId: string;
+  mode: 'tweet' | 'thread';
+  impressionType: string;
+  angle: string;
+  mediaMode: string;
+  length: string;
+  goal: string;
+  selectedExampleCount: number;
+  inspirationCount: number;
+  userTweetCount: number;
+}) {
+  const metricCards = [
+    { label: 'Konu', value: topic.trim() || 'Henüz boş', sub: mode === 'thread' ? 'Thread brief' : 'Tweet brief' },
+    { label: 'Persona', value: personaId, sub: 'Ses hafızası' },
+    { label: 'Tip', value: impressionType, sub: `${angle} · ${mediaMode}` },
+    { label: 'Uzunluk', value: length, sub: goal },
+  ];
+
+  return (
+    <div className="rounded-2xl border border-white/[0.07] bg-white/[0.03] p-4 space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold text-[#e8e8e0] uppercase tracking-[0.14em]">Çalışma Özeti</p>
+          <p className="text-[10px] text-[#6b6b72] mt-0.5">Sağ panel boş kalmasın diye anlık brief burada görünür.</p>
+        </div>
+        <span className="text-[9px] px-2 py-1 rounded-full bg-accent/[0.1] text-accent border border-accent/20">
+          live
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {metricCards.map((card) => (
+          <div key={card.label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-2.5 min-h-[76px]">
+            <p className="text-[9px] uppercase tracking-[0.16em] text-[#4a4a55]">{card.label}</p>
+            <p className="text-sm font-semibold text-[#e8e8e0] mt-1 break-words line-clamp-2">{card.value}</p>
+            <p className="text-[10px] text-[#6b6b72] mt-1">{card.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="rounded-xl border border-accent/20 bg-accent/[0.05] p-2.5">
+          <p className="text-[9px] uppercase tracking-[0.16em] text-accent">İlham</p>
+          <p className="text-lg font-semibold text-[#e8e8e0] mt-1">
+            {selectedExampleCount > 0 ? `${selectedExampleCount}/${inspirationCount}` : inspirationCount}
+          </p>
+          <p className="text-[10px] text-[#6b6b72] mt-0.5">seçili örnek / havuz</p>
+        </div>
+        <div className="rounded-xl border border-accent-green/20 bg-accent-green/[0.05] p-2.5">
+          <p className="text-[9px] uppercase tracking-[0.16em] text-accent-green">Kendi Sesin</p>
+          <p className="text-lg font-semibold text-[#e8e8e0] mt-1">{userTweetCount}</p>
+          <p className="text-[10px] text-[#6b6b72] mt-0.5">öğrenilen tweet</p>
+        </div>
+        <div className="rounded-xl border border-accent-yellow/20 bg-accent-yellow/[0.05] p-2.5">
+          <p className="text-[9px] uppercase tracking-[0.16em] text-accent-yellow">Format</p>
+          <p className="text-lg font-semibold text-[#e8e8e0] mt-1">{mode === 'thread' ? '🧵' : '✍︎'}</p>
+          <p className="text-[10px] text-[#6b6b72] mt-0.5">{mode === 'thread' ? 'çok parçalı' : 'tek akış'}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 space-y-2">
+        <p className="text-[9px] uppercase tracking-[0.16em] text-[#4a4a55]">Bugün ne oluyor?</p>
+        <ol className="space-y-1.5 text-[11px] text-[#8b8b96] leading-relaxed">
+          <li className="flex gap-2">
+            <span className="text-accent-green shrink-0">1.</span>
+            Konuyu yaz, örnekler otomatik sıralansın, prompt’u gerektiğinde daralt.
+          </li>
+          <li className="flex gap-2">
+            <span className="text-accent-green shrink-0">2.</span>
+            Persona ve konu aynı havuzu okur, en alakalı ve en çok görülenler üstte gelir.
+          </li>
+          <li className="flex gap-2">
+            <span className="text-accent-green shrink-0">3.</span>
+            Üret sonrası sağ panelde örnekleri tekrar karşılaştır, iyi olanı kaydet.
+          </li>
+        </ol>
+        <p className="text-[10px] text-[#4a4a55]">
+          İlham havuzu: {selectedExampleCount > 0 ? `${selectedExampleCount}/${inspirationCount}` : inspirationCount} · Kullanıcı tweeti: {userTweetCount}
+        </p>
       </div>
     </div>
   );
@@ -275,7 +423,7 @@ function AccountHealth({ settings, userTweets }: { settings: any; userTweets: Us
             <p className="text-[10px] text-[#4a4a55]">Tweetler yükleniyor...</p>
           )}
         </div>
-      )}
+      )} 
     </div>
   );
 }
@@ -423,19 +571,39 @@ export function Generate() {
   const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
 
   // Aktif profilden veya legacy settings'ten ayarları al
-  const effectiveSettings = activeProfile
-    ? { ...settings, niche: activeProfile.niche, defaultPersona: activeProfile.defaultPersona, toneProfile: activeProfile.toneProfile, twitterUsername: activeProfile.twitterUsername, hasPremium: activeProfile.hasPremium }
-    : settings;
+  const effectiveSettings = useMemo(() => (
+    activeProfile
+      ? { ...settings, niche: activeProfile.niche, defaultPersona: activeProfile.defaultPersona, toneProfile: activeProfile.toneProfile, twitterUsername: activeProfile.twitterUsername, hasPremium: activeProfile.hasPremium }
+      : settings
+  ), [
+    settings.xquikKey,
+    settings.claudeKey,
+    settings.activeProfileId,
+    settings.niche,
+    settings.defaultPersona,
+    settings.toneProfile,
+    settings.twitterUsername,
+    settings.hasPremium,
+    activeProfile?.id,
+    activeProfile?.niche,
+    activeProfile?.defaultPersona,
+    activeProfile?.toneProfile,
+    activeProfile?.twitterUsername,
+    activeProfile?.hasPremium,
+  ]);
 
   const ss = sessionStorage;
   const [topic, setTopic] = useState(() => ss.getItem('gen_topic') || '');
   const [impressionType, setImpressionType] = useState(() => ss.getItem('gen_type') || 'Data');
+  const [angle, setAngle] = useState(() => ss.getItem('gen_angle') || 'auto');
+  const [mediaMode, setMediaMode] = useState(() => ss.getItem('gen_media') || 'auto');
   const [length, setLength] = useState(() => ss.getItem('gen_length') || 'standard');
   const [goal, setGoal] = useState(() => ss.getItem('gen_goal') || 'Engagement');
   const [variations, setVariations] = useState(() => Number(ss.getItem('gen_vars')) || 3);
+  const [inspirationHours, setInspirationHours] = useState(() => Number(ss.getItem('gen_inspiration_hours')) || 24);
   const [persona, setPersona] = useState<any>(null);
   const [personaId, setPersonaId] = useState(() => ss.getItem('gen_persona') || effectiveSettings.defaultPersona || 'hurricane');
-  const personaList = ['hurricane', 'tr_educational', 'tr_controversial', 'tr_casual'];
+  const personaList = ['alperk55', 'hurricane', 'tr_educational', 'tr_controversial', 'tr_casual'];
   const [radarItems, setRadarItems] = useState<RadarItem[]>([]);
   const [algoData, setAlgoData] = useState<ComposeAlgoData | null>(null);
   const [userTweets, setUserTweets] = useState<UserTweet[]>([]);
@@ -482,18 +650,142 @@ export function Generate() {
   // Viral tweetler — konuya göre xquik'ten çekilen örnek tweetler
   const [viralTweets, setViralTweets] = useState<TweetSearchResult[]>([]);
   const [viralLoading, setViralLoading] = useState(false);
+  const [showInspirationRail, setShowInspirationRail] = useState(false);
+  const [selectedViralTweetIds, setSelectedViralTweetIds] = useState<string[]>(() => {
+    try {
+      const saved = sessionStorage.getItem('gen_viral_selected_ids');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const viralDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const viralRequestIdRef = useRef(0);
+  const viralSelectionSeedRef = useRef('');
   // Viral thread'ler — thread modu için ilham
-  const [viralThreads, setViralThreads] = useState<ThreadResult[]>([]);
+  const [, setViralThreads] = useState<ThreadResult[]>([]);
   // Dış trendler (Reddit / HN / Google)
   const [externalTrends, setExternalTrends] = useState<ExternalTrends>({ reddit: [], hackernews: [], google: [] });
 
+  const loadTopicInspiration = useCallback(async (
+    queryText: string,
+    force = false
+  ) => {
+    const cleaned = queryText.trim();
+    if (!settings.xquikKey || cleaned.length < 5) {
+      setViralTweets([]);
+      setViralThreads([]);
+      setViralLoading(false);
+      return { tweets: [] as TweetSearchResult[], threads: [] as ThreadResult[] };
+    }
+
+    const requestId = ++viralRequestIdRef.current;
+    setViralLoading(true);
+
+    try {
+      const queryVariants = buildTopicSearchQueries(cleaned);
+      const langs = buildTopicSearchLanguages(cleaned);
+      const queryPlan = Array.from(new Set([
+        queryVariants[0] || cleaned,
+        queryVariants[1] || '',
+      ])).slice(0, force ? 2 : 1);
+      const langPlan = [langs[0] || 'tr'];
+      const tweetMap = new Map<string, TweetSearchResult>();
+
+      // İlk deneme: min 20 beğeni
+      for (const queryVariant of queryPlan) {
+        for (const lang of langPlan) {
+          const batch = await xquikApi.searchTweets(settings.xquikKey, queryVariant, {
+            minFaves: 20,
+            lang,
+            hours: inspirationHours,
+            limit: 25,
+          });
+          batch.forEach((tweet) => {
+            const key = tweet.id || tweet.url || `${tweet.authorHandle}:${tweet.text}`;
+            if (!tweetMap.has(key)) tweetMap.set(key, tweet);
+          });
+        }
+      }
+
+      // Yeterli sonuç yoksa bir kez daha filtresiz dene
+      if (tweetMap.size < 5) {
+        const fallback = await xquikApi.searchTweets(settings.xquikKey, queryPlan[0], {
+          minFaves: 0,
+          lang: langPlan[0],
+          hours: inspirationHours,
+          limit: 25,
+        });
+        fallback.forEach((tweet) => {
+          const key = tweet.id || tweet.url || `${tweet.authorHandle}:${tweet.text}`;
+          if (!tweetMap.has(key)) tweetMap.set(key, tweet);
+        });
+      }
+
+      const engScore = (t: TweetSearchResult) =>
+        (t.likes || 0) + (t.replies || 0) * 5 + (t.retweets || 0) * 2 + Math.round((t.views || 0) / 100);
+
+      const bestTweets = rankContextualTweets([...tweetMap.values()], cleaned)
+        .filter((t) => (t.likes || 0) >= 1)
+        .sort((a, b) => engScore(b) - engScore(a))
+        .slice(0, 20);
+
+      if (requestId !== viralRequestIdRef.current) {
+        return { tweets: bestTweets, threads: [] };
+      }
+
+      setViralTweets(bestTweets);
+      setViralThreads([]);
+      return { tweets: bestTweets, threads: [] };
+    } finally {
+      if (requestId === viralRequestIdRef.current) {
+        setViralLoading(false);
+      }
+    }
+  }, [settings.xquikKey, inspirationHours]);
+
   useEffect(() => {
-    fetch(`/personas/${personaId}.json`)
-      .then((r) => r.json())
-      .then((data) => setPersona(data))
-      .catch(() => setPersona(null));
+    let cancelled = false;
+    loadPersonaById(personaId)
+      .then((data) => {
+        if (!cancelled) setPersona(data);
+      })
+      .catch(() => {
+        if (!cancelled) setPersona(null);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [personaId]);
+
+  useEffect(() => {
+    const onPersonaUpdate = (event: Event) => {
+      const detail = (event as CustomEvent<{ personaId?: string }>).detail;
+      if (detail?.personaId === personaId) {
+        loadPersonaById(personaId).then((data) => setPersona(data)).catch(() => setPersona(null));
+      }
+    };
+
+    window.addEventListener('persona-cache-updated', onPersonaUpdate);
+    return () => window.removeEventListener('persona-cache-updated', onPersonaUpdate);
+  }, [personaId]);
+
+  const personaForPrompt = useMemo(
+    () => (persona ? enrichPersonaWithTweets(persona, userTweets) : null),
+    [persona, userTweets]
+  );
+  const personaLearningKeyRef = useRef('');
+
+  useEffect(() => {
+    const signature = personaForPrompt?.learning_summary?.learning_signature || '';
+    if (!personaId || !signature) return;
+
+    const cacheKey = `${personaId}:${signature}`;
+    if (personaLearningKeyRef.current === cacheKey) return;
+
+    personaLearningKeyRef.current = cacheKey;
+    persistEnrichedPersona(personaId, personaForPrompt);
+  }, [personaId, personaForPrompt]);
 
   useEffect(() => {
     if (settings.xquikKey) {
@@ -511,86 +803,159 @@ export function Generate() {
   // State'i sessionStorage'a persist et — sayfa değişince kaybolmasın
   useEffect(() => { sessionStorage.setItem('gen_topic', topic); }, [topic]);
   useEffect(() => { sessionStorage.setItem('gen_type', impressionType); }, [impressionType]);
+  useEffect(() => { sessionStorage.setItem('gen_angle', angle); }, [angle]);
+  useEffect(() => { sessionStorage.setItem('gen_media', mediaMode); }, [mediaMode]);
   useEffect(() => { sessionStorage.setItem('gen_length', length); }, [length]);
   useEffect(() => { sessionStorage.setItem('gen_goal', goal); }, [goal]);
   useEffect(() => { sessionStorage.setItem('gen_vars', String(variations)); }, [variations]);
+  useEffect(() => { sessionStorage.setItem('gen_inspiration_hours', String(inspirationHours)); }, [inspirationHours]);
   useEffect(() => { sessionStorage.setItem('gen_persona', personaId); }, [personaId]);
-
   // Profil değişince personaId sıfırla
   useEffect(() => {
     setPersonaId(effectiveSettings.defaultPersona || 'hurricane');
   }, [activeProfileId]);
 
-  // Viral tweet fetch — topic değişince debounce ile tetikle
+  // Viral tweet fetch — konu değişince debounce ile tetikle
   useEffect(() => {
     if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current);
     if (!topic.trim() || topic.length < 5 || !settings.xquikKey) {
+      setShowInspirationRail(false);
       setViralTweets([]);
+      setViralThreads([]);
       return;
     }
+
+    setShowInspirationRail(false);
     viralDebounceRef.current = setTimeout(async () => {
-      setViralLoading(true);
-      const [tweets, threads] = await Promise.all([
-        xquikApi.searchTweets(settings.xquikKey, topic, {
-          minFaves: 100, lang: 'tr', hours: 72, limit: 10,
-        }),
-        xquikApi.searchThreads(settings.xquikKey, topic, {
-          lang: 'tr', hours: 72, limit: 3,
-        }),
-      ]);
-      console.info('[viralTweets] çekilen:', tweets.length, tweets.map(t => `❤${t.likes} "${t.text?.slice(0,60)}"`));
-      setViralTweets(tweets);
-      setViralThreads(threads);
-      setViralLoading(false);
-    }, 1200);
+      const result = await loadTopicInspiration(topic, true);
+      console.info('[viralTweets] çekilen:', result.tweets.length);
+    }, 650);
+
     return () => {
       if (viralDebounceRef.current) clearTimeout(viralDebounceRef.current);
       setViralLoading(false);
     };
-  }, [topic, settings.xquikKey]);
+  }, [topic, settings.xquikKey, loadTopicInspiration]);
 
   useEffect(() => {
-    if (!persona) return;
-    const sys = buildSystemPrompt(persona, effectiveSettings, algoData, db.getTweets());
+    if (!viralTweets.length) {
+      viralSelectionSeedRef.current = '';
+      setSelectedViralTweetIds([]);
+      return;
+    }
+
+    const signature = viralTweets.map((tweet) => tweet.id).join('|');
+    setSelectedViralTweetIds((prev) => {
+      const valid = prev.filter((id) => viralTweets.some((tweet) => tweet.id === id));
+      if (valid.length > 0) return valid.slice(0, 5);
+      if (viralSelectionSeedRef.current === signature) return prev;
+      viralSelectionSeedRef.current = signature;
+      return viralTweets.slice(0, Math.min(4, viralTweets.length)).map((tweet) => tweet.id);
+    });
+  }, [viralTweets]);
+
+  useEffect(() => {
+    sessionStorage.setItem('gen_viral_selected_ids', JSON.stringify(selectedViralTweetIds));
+  }, [selectedViralTweetIds]);
+
+  const selectedViralTweets = useMemo(() => (
+    selectedViralTweetIds.length > 0
+      ? viralTweets.filter((tweet) => selectedViralTweetIds.includes(tweet.id))
+      : []
+  ), [viralTweets, selectedViralTweetIds]);
+
+  const promptInspirationTweets = selectedViralTweets.length > 0 ? selectedViralTweets : viralTweets;
+
+  useEffect(() => {
+    if (!personaForPrompt) return;
+    const sys = buildSystemPrompt(personaForPrompt, effectiveSettings, algoData, db.getTweets());
     const user = buildUserMessage({
       topic: topic || '(konu girilmedi)',
-      persona, settings: effectiveSettings,
+      persona: personaForPrompt, settings: effectiveSettings,
       recentTweets: db.getTweets(),
       xUserTweets: userTweets,
-      radarItems, impressionType, length, goal, variations,
-      viralTweets, externalTrends,
+      radarItems, impressionType, angle, mediaMode, length, goal, variations,
+      viralTweets: promptInspirationTweets, externalTrends,
     });
-    setCopyPrompt(buildCopyPrompt(sys, user, persona, effectiveSettings, algoData, viralTweets));
-  }, [topic, persona, impressionType, length, goal, variations, radarItems, algoData, userTweets, viralTweets, activeProfileId]);
+    setCopyPrompt(buildCopyPrompt(sys, user, personaForPrompt, effectiveSettings, algoData, length));
+  }, [topic, personaForPrompt, impressionType, angle, mediaMode, length, goal, variations, radarItems, algoData, userTweets, promptInspirationTweets, activeProfileId, effectiveSettings, externalTrends]);
 
   // ── Prompt al — API'siz, sadece kopyala ────────────────────────────────────
   const handleCopyPrompt = useCallback(async () => {
     if (!topic.trim()) return;
-    await navigator.clipboard.writeText(copyPrompt);
+    const inspiration = settings.xquikKey && topic.length >= 5 && promptInspirationTweets.length === 0 && !viralLoading
+      ? await loadTopicInspiration(topic, true)
+      : { tweets: promptInspirationTweets, threads: [] as ThreadResult[] };
+    const promptTweets = inspiration.tweets.length > 0 ? inspiration.tweets : promptInspirationTweets;
+    const sys = buildSystemPrompt(personaForPrompt, effectiveSettings, algoData, db.getTweets());
+    const user = buildUserMessage({
+      topic: topic || '(konu girilmedi)',
+      persona: personaForPrompt,
+      settings: effectiveSettings,
+      recentTweets: db.getTweets(),
+      xUserTweets: userTweets,
+      radarItems,
+      impressionType,
+      angle,
+      mediaMode,
+      length,
+      goal,
+      variations,
+      viralTweets: promptTweets,
+      externalTrends,
+    });
+    await navigator.clipboard.writeText(buildCopyPrompt(sys, user, personaForPrompt, effectiveSettings, algoData, length));
     setPromptCopied(true);
     setTimeout(() => setPromptCopied(false), 3000);
-  }, [topic, copyPrompt]);
+  }, [topic, personaForPrompt, effectiveSettings, algoData, userTweets, radarItems, impressionType, angle, mediaMode, length, goal, variations, externalTrends, settings.xquikKey, promptInspirationTweets, viralLoading]);
 
   // ── Direkt üret — Claude API ile ────────────────────────────────────────────
   const handleGenerate = useCallback(async () => {
     if (!topic.trim() || !settings.claudeKey) return;
     setLoading(true); setError(''); setResults([]); setThread(null);
+    setShowInspirationRail(true);
 
-    const sys = buildSystemPrompt(persona, effectiveSettings, algoData, db.getTweets());
-    console.info('[generate] viralTweets sayısı:', viralTweets.length, '| mod:', mode);
+    const sys = buildSystemPrompt(personaForPrompt, effectiveSettings, algoData, db.getTweets());
+    const inspiration = settings.xquikKey && topic.length >= 5
+      ? await loadTopicInspiration(topic, true)
+      : { tweets: promptInspirationTweets, threads: [] as ThreadResult[] };
+    const promptTweets = inspiration.tweets.length > 0 ? inspiration.tweets : promptInspirationTweets;
+    const promptThreads = inspiration.threads.length > 0 ? inspiration.threads : [];
+    console.info('[generate] viralTweets sayısı:', promptTweets.length, '| mod:', mode, '| seçili:', selectedViralTweets.length);
 
     if (mode === 'thread') {
-      const user = buildThreadMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets });
-      console.info('[thread] viralBlock var mı:', viralTweets.length > 0, '| prompt uzunluğu:', user.length);
-      try { setThread(await claudeApi.generateThread(settings.claudeKey, sys, user)); }
+      const user = buildThreadMessage({
+        topic,
+        persona: personaForPrompt,
+        settings: effectiveSettings,
+        recentTweets: db.getTweets(),
+        xUserTweets: userTweets,
+        radarItems,
+        impressionType,
+        angle,
+        mediaMode,
+        length,
+        goal,
+        variations,
+        viralTweets: promptTweets,
+        viralThreads: promptThreads,
+      });
+      console.info('[thread] viralBlock var mı:', promptTweets.length > 0, '| prompt uzunluğu:', user.length);
+      try {
+        const generatedThread = await claudeApi.generateThread(settings.claudeKey, sys, user);
+        setThread(settings.xquikKey && generatedThread ? await scoreThreadWithXquik(settings.xquikKey, generatedThread) : generatedThread);
+      }
       catch (e: any) { setError(e.message || 'Claude API hatası.'); }
     } else {
-      const user = buildUserMessage({ topic, persona, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, length, goal, variations, viralTweets, externalTrends });
-      try { setResults(await claudeApi.generateTweets(settings.claudeKey, sys, user, variations)); }
+    const user = buildUserMessage({ topic, persona: personaForPrompt, settings: effectiveSettings, recentTweets: db.getTweets(), xUserTweets: userTweets, radarItems, impressionType, angle, mediaMode, length, goal, variations, viralTweets: promptTweets, externalTrends });
+      try {
+        const generated = await claudeApi.generateTweets(settings.claudeKey, sys, user, variations);
+        setResults(settings.xquikKey ? await scoreGeneratedVariations(settings.xquikKey, generated) : generated);
+      }
       catch (e: any) { setError(e.message || 'Claude API hatası.'); }
     }
     setLoading(false);
-  }, [topic, persona, effectiveSettings, settings.claudeKey, radarItems, impressionType, length, goal, variations, mode, algoData, userTweets, viralTweets]);
+  }, [topic, personaForPrompt, effectiveSettings, settings.claudeKey, settings.xquikKey, radarItems, impressionType, angle, mediaMode, length, goal, variations, mode, algoData, userTweets, promptInspirationTweets, selectedViralTweets.length]);
 
   const handleSaveTweet = (tweet: TweetVariation) => {
     db.saveTweet({
@@ -598,16 +963,52 @@ export function Generate() {
       impressionType,
       score: tweet.total_score, scores: tweet.scores, scoreReason: tweet.score_reason,
       engagement: { like: 0, reply: 0, rt: 0, quote: 0 },
+      xquikScore: tweet.xquikScore?.total,
     });
     if (settings.xquikKey) xquikApi.saveDraft(settings.xquikKey, tweet.text, topic);
   };
 
+  const toggleInspirationTweet = useCallback((tweetId: string) => {
+    setSelectedViralTweetIds((prev) => {
+      if (prev.includes(tweetId)) return prev.filter((id) => id !== tweetId);
+      if (prev.length >= 5) return prev;
+      return [...prev, tweetId];
+    });
+  }, []);
+
+  const selectTopInspirationTweets = useCallback(() => {
+    setSelectedViralTweetIds(viralTweets.slice(0, Math.min(4, viralTweets.length)).map((tweet) => tweet.id));
+  }, [viralTweets]);
+
+  const clearInspirationSelection = useCallback(() => {
+    setSelectedViralTweetIds([]);
+  }, []);
+
   return (
-    <div className="flex h-full">
+    <div className="page-shell flex h-full flex-col gap-3 p-3 overflow-y-auto 2xl:overflow-hidden">
+      <PageHeader
+        compact
+        kicker="ÜRETİM MASASI"
+        title="Tweet ve thread workbench"
+        subtitle="Konu, persona, format ve canlı sinyalleri tek yerde toparla. Solda ayarla, sağda çıktıyı gör."
+        actions={<TimingBadge />}
+        chips={[
+          { label: mode === 'thread' ? 'Thread modu' : 'Tweet modu', tone: 'accent' },
+          { label: `Persona: ${personaId}`, tone: 'neutral' },
+          { label: `Tip: ${IMPRESSION_TYPES.find((t) => t.id === impressionType)?.label || 'Genel'}`, tone: 'neutral' },
+          { label: `Açı: ${ANGLES.find((t) => t.id === angle)?.label || 'Otomatik'}`, tone: 'neutral' },
+          { label: `Medya: ${MEDIA_MODES.find((t) => t.id === mediaMode)?.label || 'Otomatik'}`, tone: 'neutral' },
+          { label: 'Sıralama: views ↓ + relevance', tone: 'neutral' },
+          { label: `${variations} varyasyon`, tone: 'neutral' },
+          { label: `İlham: ${promptInspirationTweets.length || viralTweets.length || 0}`, tone: promptInspirationTweets.length > 0 ? 'green' : 'neutral' },
+        ]}
+      />
+
+      <div className="flex flex-1 min-h-0 flex-col 2xl:flex-row gap-3">
       {/* ── Sol panel ─────────────────────────────────────────────── */}
       <div
-        style={{ width: panelWidth, minWidth: 260, maxWidth: 600 }}
-        className="shrink-0 border-r border-white/[0.06] p-4 space-y-4 overflow-y-auto bg-[#0c0c0f]"
+        style={{ ['--panel-width' as any]: `${panelWidth}px` } as any}
+        className="responsive-resizable-panel premium-panel-strong w-full 2xl:shrink-0 p-4 space-y-4 overflow-y-auto bg-[#0c0c0f]/80"
       >
 
         {/* Hesap Profili Seçici */}
@@ -680,7 +1081,7 @@ export function Generate() {
             {(['tweet', 'thread'] as const).map((m) => (
               <button
                 key={m}
-                onClick={() => { setMode(m); setResults([]); setThread(null); setError(''); }}
+                onClick={() => { setMode(m); setResults([]); setThread(null); setError(''); setShowInspirationRail(false); }}
                 className={`flex-1 text-xs py-1.5 rounded-lg transition-all font-medium ${
                   mode === m ? 'bg-accent text-white shadow-lg shadow-accent/20' : 'text-[#6b6b72] hover:text-[#e8e8e0]'
                 }`}
@@ -689,11 +1090,37 @@ export function Generate() {
               </button>
             ))}
           </div>
-          {mode === 'thread' && (
-            <p className="text-[10px] text-accent/70 mt-1.5 pl-1">
-              Hook → 2-3 içerik → CTA · %300 daha fazla dwell time
-            </p>
-          )}
+        {mode === 'thread' && (
+          <p className="text-[10px] text-accent/70 mt-1.5 pl-1">
+            Hook → 2-3 içerik → CTA · %300 daha fazla dwell time
+          </p>
+        )}
+        </div>
+
+        {/* Saat */}
+        <div>
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
+            Saat
+            <Tooltip text="İlham tweetleri son kaç saat içinden çekilsin." />
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {INSPIRATION_HOURS_OPTS.map((hours) => (
+              <button
+                key={hours}
+                onClick={() => setInspirationHours(hours)}
+                className={`text-xs px-2.5 py-1 rounded-full transition-all font-medium ${
+                  inspirationHours === hours
+                    ? 'bg-accent-green text-white shadow-sm shadow-accent-green/20'
+                    : 'bg-white/[0.05] text-[#6b6b72] hover:text-[#e8e8e0] hover:bg-white/[0.08]'
+                }`}
+              >
+                Son {hours} saat
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-[#4a4a55] mt-1.5 pl-0.5">
+            İlham havuzu yalnızca seçtiğin zaman aralığından çekilir.
+          </p>
         </div>
 
         {/* Tip */}
@@ -720,6 +1147,60 @@ export function Generate() {
           </div>
           <p className="text-[10px] text-[#4a4a55] mt-1.5 pl-0.5">
             {IMPRESSION_TYPES.find(t => t.id === impressionType)?.tip}
+          </p>
+        </div>
+
+        {/* Açı */}
+        <div>
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
+            Açı
+            <Tooltip text="Metnin tavrı. Sivri, nüanslı, soru bazlı veya karşı görüş gibi küçük ama etkili bir daraltma." />
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {ANGLES.map((a) => (
+              <button
+                key={a.id}
+                onClick={() => setAngle(a.id)}
+                title={a.tip}
+                className={`text-xs px-2.5 py-1 rounded-full transition-all font-medium ${
+                  angle === a.id
+                    ? 'bg-accent text-white shadow-sm shadow-accent/20'
+                    : 'bg-white/[0.05] text-[#6b6b72] hover:text-[#e8e8e0] hover:bg-white/[0.08]'
+                }`}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-[#4a4a55] mt-1.5 pl-0.5">
+            {ANGLES.find((a) => a.id === angle)?.tip}
+          </p>
+        </div>
+
+        {/* Medya */}
+        <div>
+          <label className="text-[11px] font-semibold text-[#7a7a85] uppercase tracking-wider mb-1.5 block flex items-center">
+            Medya
+            <Tooltip text="Metni hangi medya hissine göre yazacağımızı daraltır. Video, görsel, quote ya da saf metin." />
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {MEDIA_MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setMediaMode(m.id)}
+                title={m.tip}
+                className={`text-xs px-2.5 py-1 rounded-full transition-all font-medium ${
+                  mediaMode === m.id
+                    ? 'bg-accent-green text-white shadow-sm shadow-accent-green/20'
+                    : 'bg-white/[0.05] text-[#6b6b72] hover:text-[#e8e8e0] hover:bg-white/[0.08]'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <p className="text-[10px] text-[#4a4a55] mt-1.5 pl-0.5">
+            {MEDIA_MODES.find((m) => m.id === mediaMode)?.tip}
           </p>
         </div>
 
@@ -830,14 +1311,6 @@ export function Generate() {
           <div className="h-px flex-1 bg-white/[0.05]" />
         </div>
 
-        {/* Radar */}
-        <RadarPanel apiKey={settings.xquikKey} onSelect={(t) => setTopic(t)} />
-
-        {/* Dış Trendler (Reddit / HN / Google) */}
-        {(externalTrends.reddit.length > 0 || externalTrends.hackernews.length > 0 || externalTrends.google.length > 0) && (
-          <ExternalTrendsPanel trends={externalTrends} onSelect={(t) => setTopic(t)} />
-        )}
-
         {/* Context preview */}
         <ContextPreview prompt={copyPrompt} />
 
@@ -903,14 +1376,14 @@ export function Generate() {
           document.body.style.userSelect = 'none';
           e.preventDefault();
         }}
-        className="w-1 shrink-0 hover:bg-accent/30 active:bg-accent/50 cursor-col-resize transition-colors group relative"
+        className="hidden 2xl:block w-1 shrink-0 hover:bg-accent/30 active:bg-accent/50 cursor-col-resize transition-colors group relative"
         title="Sürükle"
       >
         <div className="absolute inset-y-0 -left-1 -right-1" />
       </div>
 
       {/* ── Sağ panel ─────────────────────────────────────────────── */}
-      <div className="flex-1 p-5 overflow-y-auto">
+      <div className="flex-1 min-w-0 p-5 overflow-y-auto">
 
         {/* Timing + header */}
         <div className="flex items-center justify-between mb-5">
@@ -918,7 +1391,7 @@ export function Generate() {
           <div className="flex items-center gap-2">
             {(results.length > 0 || thread) && (
               <button
-                onClick={() => { setResults([]); setThread(null); setError(''); }}
+                onClick={() => { setResults([]); setThread(null); setError(''); setShowInspirationRail(false); }}
                 className="text-[10px] text-[#4a4a55] hover:text-[#8b8b96] transition-colors px-2 py-0.5 rounded-lg hover:bg-white/[0.04]"
               >
                 ✕ Temizle
@@ -977,13 +1450,23 @@ export function Generate() {
                   {thread.tweets.length} tweet
                 </span>
               </div>
-              <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
-                thread.total_score >= 85 ? 'text-accent-green bg-accent-green/10 border-accent-green/30'
-                : thread.total_score >= 70 ? 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30'
-                : 'text-accent-orange bg-accent-orange/10 border-accent-orange/30'
-              }`}>
-                {thread.total_score}/100
-              </span>
+              <div className="flex items-center gap-2">
+                {thread.xquikScore && (
+                  <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                    thread.xquikScore.passed ? 'text-accent-green bg-accent-green/10 border-accent-green/30'
+                    : 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30'
+                  }`}>
+                    Grok {thread.xquikScore.total}/100
+                  </span>
+                )}
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${
+                  thread.total_score >= 85 ? 'text-accent-green bg-accent-green/10 border-accent-green/30'
+                  : thread.total_score >= 70 ? 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30'
+                  : 'text-accent-orange bg-accent-orange/10 border-accent-orange/30'
+                }`}>
+                  {thread.total_score}/100
+                </span>
+              </div>
             </div>
             {thread.score_reason && (
               <p className="text-[11px] text-[#6b6b72] italic pl-1 mb-2">{thread.score_reason}</p>
@@ -1026,37 +1509,74 @@ export function Generate() {
           </div>
         )}
 
-        {/* Boş ekran — algo ipuçları */}
+        {/* Boş ekran — örnek tweet vitrini veya kısa durum kartı */}
         {!loading && results.length === 0 && !thread && !error && (
-          <EmptyState algoData={algoData} />
+          <div className="space-y-3">
+            {viralTweets.length > 0 ? (
+              <InspirationSpotlight
+                topic={topic}
+                tweets={viralTweets}
+                selectedIds={selectedViralTweetIds}
+                onToggleSelect={toggleInspirationTweet}
+                onSelectTop={selectTopInspirationTweets}
+                onClear={clearInspirationSelection}
+                onUseAsTopic={(text) => setTopic(text.slice(0, 200))}
+              />
+            ) : (
+              <EmptyState algoData={algoData} />
+            )}
+          </div>
         )}
       </div>
 
       {/* ── İlham Paneli — viral tweetler ─────────────────────────── */}
-      {(viralLoading || viralTweets.length > 0) && (
-        <div className="w-[270px] shrink-0 border-l border-white/[0.06] bg-[#0a0a0d] flex flex-col overflow-hidden">
+      {showInspirationRail && (viralLoading || viralTweets.length > 0) && (
+        <div className="w-full 2xl:w-[360px] 2xl:shrink-0 border-t 2xl:border-t-0 2xl:border-l border-white/[0.06] bg-[#0a0a0d] flex flex-col overflow-hidden">
           {/* Header */}
-          <div className="px-3.5 py-3 border-b border-white/[0.05] flex items-center justify-between shrink-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] font-semibold text-[#8b8b96]">İlham Kaynakları</span>
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
-                xquik
-              </span>
-              {viralTweets.length > 0 && (
-                <span className="text-[9px] text-[#4a4a55]">{viralTweets.length}</span>
-              )}
+          <div className="px-3.5 py-3 border-b border-white/[0.05] flex items-start justify-between gap-3 shrink-0">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-semibold text-[#8b8b96]">İlham Tweetleri</span>
+                <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent/10 text-accent border border-accent/20">
+                  xquik
+                </span>
+                {viralTweets.length > 0 && (
+                  <span className="text-[9px] text-[#4a4a55]">{viralTweets.length}</span>
+                )}
+                {selectedViralTweets.length > 0 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-accent-green/10 text-accent-green border border-accent-green/20">
+                    seçili {selectedViralTweets.length}
+                  </span>
+                )}
+              </div>
+              <p className="text-[9px] text-[#4a4a55] leading-relaxed">
+                Sıcak tweetler. 3-5 tanesini seç, promptu daralt, kendi sesinle yeniden yaz.
+              </p>
             </div>
             {viralLoading && (
               <span className="w-3 h-3 border border-accent/30 border-t-accent rounded-full animate-spin shrink-0" />
             )}
           </div>
 
-          {/* Açıklama */}
-          <div className="px-3.5 py-2 border-b border-white/[0.04] shrink-0">
-            <p className="text-[9px] text-[#4a4a55] leading-relaxed">
-              Claude bu tweetleri analiz ederek senin için içerik üretiyor. Hangisi tutmuş, neden?
-            </p>
-          </div>
+          {viralTweets.length > 0 && (
+            <div className="px-3.5 py-2 border-b border-white/[0.04] shrink-0 flex flex-wrap items-center gap-2">
+              <button
+                onClick={selectTopInspirationTweets}
+                className="text-[10px] px-2 py-1 rounded-full bg-white/[0.05] hover:bg-white/[0.09] text-[#e8e8e0] transition-colors"
+              >
+                İlk 4
+              </button>
+              <button
+                onClick={clearInspirationSelection}
+                className="text-[10px] px-2 py-1 rounded-full bg-white/[0.05] hover:bg-white/[0.09] text-[#6b6b72] transition-colors"
+              >
+                Temizle
+              </button>
+              <span className="text-[9px] text-[#4a4a55]">
+                En iyi akış için 3-5 seçili tweet yeterli.
+              </span>
+            </div>
+          )}
 
           {/* Scrollable tweet listesi */}
           <div className="flex-1 overflow-y-auto divide-y divide-white/[0.04]">
@@ -1072,29 +1592,89 @@ export function Generate() {
               </div>
             )}
             {viralTweets.map((vt, idx) => (
-              <div key={vt.id} className="px-3.5 py-3 hover:bg-white/[0.02] transition-colors group">
-                {/* Sıra + yazar */}
+              <div
+                key={vt.id}
+                className={`px-3.5 py-3 hover:bg-white/[0.02] transition-colors group border-l-2 ${
+                  selectedViralTweetIds.includes(vt.id)
+                    ? 'border-accent-green bg-accent-green/[0.03]'
+                    : 'border-transparent'
+                }`}
+              >
                 <div className="flex items-center gap-1.5 mb-1.5">
                   <span className="text-[9px] font-bold text-[#3a3a48] w-4 shrink-0">{idx + 1}</span>
                   <span className="text-[10px] font-semibold text-[#8b8b96] truncate">@{vt.authorHandle}</span>
-                  <div className="flex items-center gap-1 ml-auto shrink-0">
-                    {vt.likes > 0 && (
-                      <span className="text-[9px] text-accent-red/70">
-                        ♥ {vt.likes >= 1000 ? `${(vt.likes / 1000).toFixed(1)}k` : vt.likes}
-                      </span>
-                    )}
-                    {vt.replies > 0 && (
-                      <span className="text-[9px] text-accent/60">
-                        · 💬 {vt.replies}
-                      </span>
-                    )}
-                  </div>
+                  {vt.createdAt && (
+                    <span className="text-[9px] text-[#4a4a55] ml-auto shrink-0">
+                      {(() => {
+                        const diff = (Date.now() - new Date(vt.createdAt).getTime()) / 60000;
+                        if (diff < 60) return `${Math.round(diff)}dk`;
+                        if (diff < 1440) return `${Math.round(diff / 60)}sa`;
+                        return `${Math.round(diff / 1440)}g`;
+                      })()}
+                    </span>
+                  )}
                 </div>
 
-                {/* Tweet metni — tam, scrollable değil çünkü panel zaten scroll ediliyor */}
+                {vt.mediaPreviewUrl && (
+                  <div className="mb-2 overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.02]">
+                    <div className="relative aspect-[16/9] w-full">
+                      <img
+                        src={vt.mediaPreviewUrl}
+                        alt={vt.text.slice(0, 60)}
+                        loading="lazy"
+                        className="h-full w-full object-cover"
+                      />
+                      {vt.isVideo && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                          <span className="rounded-full bg-black/50 px-3 py-1 text-[10px] text-white border border-white/20">
+                            Video
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {vt.quotedText && (
+                  <div className="mb-2 rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="rounded-full bg-white/[0.05] px-1.5 py-0.5 text-[9px] text-[#8b8b96]">
+                        Alıntı
+                      </span>
+                      {vt.quotedAuthorHandle && (
+                        <span className="text-[9px] text-[#4a4a55] truncate">@{vt.quotedAuthorHandle}</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-[#8b8b96] leading-relaxed">{vt.quotedText}</p>
+                    {vt.quotedMediaPreviewUrl && (
+                      <div className="mt-2 overflow-hidden rounded-lg border border-white/[0.06]">
+                        <img
+                          src={vt.quotedMediaPreviewUrl}
+                          alt={vt.quotedText.slice(0, 50)}
+                          loading="lazy"
+                          className="h-24 w-full object-cover"
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <p className="text-[11px] text-[#7a7a85] leading-relaxed group-hover:text-[#a8a8b0] transition-colors">
                   {vt.text}
                 </p>
+
+                {/* Engagement */}
+                <div className="flex items-center gap-2 mt-1.5">
+                  {vt.views != null && vt.views > 0 && (
+                    <span className="text-[9px] text-accent font-semibold">👁 {vt.views >= 1000 ? `${(vt.views/1000).toFixed(1)}k` : vt.views}</span>
+                  )}
+                  {vt.likes > 0 && (
+                    <span className="text-[9px] text-[#6b6b72]">❤ {vt.likes >= 1000 ? `${(vt.likes/1000).toFixed(1)}k` : vt.likes}</span>
+                  )}
+                  {(vt.replies || 0) > 0 && (
+                    <span className="text-[9px] text-[#6b6b72]">💬 {vt.replies}</span>
+                  )}
+                </div>
 
                 {/* Aksiyonlar */}
                 <div className="flex items-center gap-2 mt-2">
@@ -1110,6 +1690,16 @@ export function Generate() {
                   >
                     Kopyala
                   </button>
+                  <button
+                    onClick={() => toggleInspirationTweet(vt.id)}
+                    className={`text-[9px] px-1.5 py-0.5 rounded-full border transition-colors ${
+                      selectedViralTweetIds.includes(vt.id)
+                        ? 'bg-accent-green/10 text-accent-green border-accent-green/20'
+                        : 'bg-white/[0.03] text-[#6b6b72] border-white/[0.06] hover:text-[#e8e8e0] hover:bg-white/[0.06]'
+                    }`}
+                  >
+                    {selectedViralTweetIds.includes(vt.id) ? 'seçili' : 'seç'}
+                  </button>
                 </div>
               </div>
             ))}
@@ -1119,12 +1709,13 @@ export function Generate() {
           {viralTweets.length > 0 && (
             <div className="px-3.5 py-2.5 border-t border-white/[0.04] shrink-0">
               <p className="text-[9px] text-[#3a3a48] leading-relaxed">
-                Son 2 saatte ≥50 like alan tweetler · niş: {effectiveSettings.niche || 'general'}
+                Sıralama: konu alakası + görüntülenme · seçilen örnekler promptu daraltır · niş: {effectiveSettings.niche || 'general'}
               </p>
             </div>
           )}
         </div>
       )}
+    </div>
     </div>
   );
 }

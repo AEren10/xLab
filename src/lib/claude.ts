@@ -11,6 +11,7 @@ export interface TweetVariation {
   };
   total_score: number;
   score_reason: string;
+  xquikScore?: import('./xquik').XquikScore | null;
 }
 
 export interface ThreadTweet {
@@ -23,6 +24,7 @@ export interface TweetThread {
   tweets: ThreadTweet[];
   total_score: number;
   score_reason: string;
+  xquikScore?: import('./xquik').XquikScore | null;
 }
 
 const CLAUDE_API = 'https://api.anthropic.com/v1/messages';
@@ -124,7 +126,8 @@ export const claudeApi = {
   async generateVisualPrompt(
     apiKey: string,
     tweetText: string,
-    impressionType = 'general'
+    impressionType = 'general',
+    mediaHint = ''
   ): Promise<string> {
     const styleGuide: Record<string, string> = {
       'Data':     'clean infographic style, data visualization, minimal charts, white background, professional',
@@ -147,8 +150,9 @@ export const claudeApi = {
           content: `Tweet: "${tweetText.slice(0, 250)}"
 Content type: ${impressionType}
 Style reference: ${style}
+Media cue: ${mediaHint || 'no special media cue'}
 
-Write a concise Midjourney/DALL-E image prompt (max 60 words) for a Twitter post visual that matches this tweet's tone and topic. 1:1 square format. Return ONLY the prompt text, no explanation.`,
+Write a concise Midjourney/DALL-E prompt (max 60 words) for a Twitter post visual that matches this tweet's tone and topic. If the media cue suggests a video moment, make it feel like a thumbnail or cover frame. If it suggests data, make it feel like an infographic. 1:1 square format. Return ONLY the prompt text, no explanation.`,
         }],
       }),
     });
@@ -165,27 +169,17 @@ Write a concise Midjourney/DALL-E image prompt (max 60 words) for a Twitter post
   /**
    * Verilen tweete kısa, güçlü bir reply üretir. Düz metin döner (JSON yok).
    */
-  async generateReply(apiKey: string, tweetText: string, authorHandle: string): Promise<string> {
+  async generateReply(apiKey: string, prompt: string): Promise<string> {
     const res = await fetch(CLAUDE_API, {
       method: 'POST',
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: MODEL,
         max_tokens: 120,
+        temperature: 0.8,
         messages: [{
           role: 'user',
-          content: `Aşağıdaki tweete güçlü bir reply yaz.
-
-KURAL:
-- Maksimum 180 karakter
-- Değer ekle veya ilginç bir açı getir
-- Soru veya açık uç ile bitir — diyaloğu sürdür
-- İnsan gibi yaz (em dash yok, bullet yok)
-- Türkçe, hashtag ve emoji yok
-
-@${authorHandle}: ${tweetText.slice(0, 500)}
-
-Sadece reply metnini döndür, başka hiçbir şey yazma.`,
+          content: prompt,
         }],
       }),
     });
@@ -195,6 +189,69 @@ Sadece reply metnini döndür, başka hiçbir şey yazma.`,
     }
     const data = await res.json();
     return (data.content?.[0]?.text || '').trim();
+  },
+
+  /**
+   * Gerçek tweet'lerden persona JSON üretir.
+   * xquik ile çekilen tweet'leri analiz eder, stil kuralları çıkartır.
+   */
+  async buildPersonaFromTweets(
+    apiKey: string,
+    handle: string,
+    tweets: { text: string; likes: number; replies: number; retweets: number }[],
+    strategyNote = ''
+  ): Promise<object | null> {
+    logModel();
+    const tweetList = tweets
+      .slice(0, 5)
+      .map((t, i) => `[${i + 1}] (❤${t.likes} 💬${t.replies} 🔁${t.retweets})\n"${t.text}"`)
+      .join('\n\n');
+
+    const res = await fetch(CLAUDE_API, {
+      method: 'POST',
+      headers: baseHeaders(apiKey),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 800,
+        messages: [{
+          role: 'user',
+          content: `Aşağıdaki Twitter hesabının en çok etkileşim alan tweet'lerini analiz et ve persona JSON üret.
+
+Handle: @${handle}
+${strategyNote ? `Strateji notu: ${strategyNote}\n` : ''}
+En yüksek performanslı 5 tweet:
+${tweetList}
+
+Şu JSON formatını AYNEN döndür (açıklama ekleme):
+{
+  "name": "${handle}",
+  "handle": "@${handle}",
+  "language": "tr",
+  "tone": "kısa tek satır ton tanımı",
+  "strategy": "bu hesabın içerik stratejisini bir cümleyle açıkla",
+  "style_rules": ["kural1", "kural2", "kural3", "kural4", "kural5"],
+  "hook_patterns": [
+    {"pattern": "isim", "examples": ["örnek1", "örnek2"]}
+  ],
+  "best_performing_tweets": [
+    {
+      "text": "tweet metni",
+      "engagement_score": 0,
+      "hook_type": "soru hook / data hook / karşı görüş hook",
+      "why_it_worked": "neden tuttuğunu kısa açıkla"
+    }
+  ],
+  "content_angles": ["açı1", "açı2", "açı3"],
+  "avoid": ["kaçınılacak1", "kaçınılacak2"]
+}`,
+        }],
+      }),
+    });
+
+    if (!res.ok) return null;
+    const data = await res.json();
+    const text = data.content?.[0]?.text || 'null';
+    return safeParseJSON<object | null>(text, null);
   },
 
   /**

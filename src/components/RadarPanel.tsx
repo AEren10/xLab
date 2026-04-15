@@ -5,9 +5,10 @@ import type { RadarItem } from '../lib/xquik';
 interface RadarPanelProps {
   apiKey: string;
   onSelect?: (topic: string) => void;
+  featured?: boolean;
 }
 
-export function RadarPanel({ apiKey, onSelect }: RadarPanelProps) {
+export function RadarPanel({ apiKey, onSelect, featured = false }: RadarPanelProps) {
   const [items, setItems] = useState<RadarItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(true);
@@ -36,30 +37,37 @@ export function RadarPanel({ apiKey, onSelect }: RadarPanelProps) {
   }, [apiKey]);
 
   return (
-    <div className="border border-white/[0.07] rounded-xl overflow-hidden">
+    <div className={`premium-panel overflow-hidden ${featured ? 'border-white/[0.08]' : ''}`}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/[0.03] transition-colors"
+        className={`w-full flex items-start justify-between gap-3 hover:bg-white/[0.03] transition-colors ${
+          featured ? 'px-5 py-4' : 'px-4 py-3.5'
+        }`}
       >
-        <div className="flex items-center gap-2">
-          <span className="text-xs font-medium text-[#e8e8e0]">Radar Gundem</span>
-          {!apiKey && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-orange/20 text-accent-orange">
-              key yok
-            </span>
-          )}
+        <div className="space-y-1 text-left">
+          <div className="flex items-center gap-2">
+            <span className={`${featured ? 'text-sm' : 'text-xs'} font-medium text-[#e8e8e0]`}>X Radar Başlıkları</span>
+            {!apiKey && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-accent-orange/20 text-accent-orange">
+                key yok
+              </span>
+            )}
+          </div>
+          <p className={`text-[9px] text-[#6b6b72] leading-relaxed ${featured ? 'max-w-md' : ''}`}>
+            xquik radarının verdiği ham konu başlıkları. Tıkla, Generate'de kullan.
+          </p>
         </div>
-        <span className="text-[#6b6b72] text-xs">{open ? '▲' : '▼'}</span>
+        <span className={`text-[#6b6b72] ${featured ? 'text-sm' : 'text-xs'}`}>{open ? '▲' : '▼'}</span>
       </button>
 
       {open && (
-        <div className="px-4 pb-3 space-y-2 border-t border-white/[0.05]">
+        <div className={`${featured ? 'px-5 pb-4' : 'px-4 pb-3.5'} space-y-2 border-t border-white/[0.05]`}>
           {loading && (
             <div className="space-y-1.5 pt-2">
               {[...Array(4)].map((_, i) => (
                 <div
                   key={i}
-                  className="h-7 bg-white/[0.04] rounded animate-pulse"
+                  className={`bg-white/[0.04] rounded animate-pulse ${featured ? 'h-9' : 'h-7'}`}
                 />
               ))}
             </div>
@@ -75,12 +83,14 @@ export function RadarPanel({ apiKey, onSelect }: RadarPanelProps) {
                 <button
                   key={i}
                   onClick={() => onSelect?.(item.title)}
-                  className="w-full text-left text-xs px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-accent/10 hover:text-accent text-[#e8e8e0] transition-colors flex items-center gap-2"
+                  className={`w-full text-left px-3 rounded-lg bg-white/[0.03] hover:bg-accent/10 hover:text-accent text-[#e8e8e0] transition-colors flex items-center gap-2 ${
+                    featured ? 'py-3 text-sm' : 'py-2 text-xs'
+                  }`}
                 >
                   <span className="text-[#6b6b72]">{i + 1}.</span>
                   <span className="truncate">{item.title}</span>
                   {item.volume && (
-                    <span className="ml-auto text-[10px] text-[#6b6b72] shrink-0">
+                    <span className={`ml-auto text-[10px] text-[#6b6b72] shrink-0 ${featured ? 'font-medium' : ''}`}>
                       {item.volume.toLocaleString()}
                     </span>
                   )}

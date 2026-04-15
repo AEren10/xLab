@@ -4,6 +4,7 @@ import type { TweetEntry } from '../lib/db';
 import { SCORING_CRITERIA } from '../lib/skill';
 import { scoreColorSimple as scoreColor } from '../lib/utils';
 import { xquikApi } from '../lib/xquik';
+import { PageHeader } from '../components/PageHeader';
 
 /**
  * History — Kaydedilen tweetler + reply'lar + feedback loop.
@@ -129,7 +130,26 @@ export function History() {
     .sort((a, b) => b[1].avgEng - a[1].avgEng);
 
   return (
-    <div className="p-4 space-y-4 overflow-y-auto h-full max-w-4xl mx-auto">
+    <div className="page-shell p-3 space-y-3 overflow-y-auto h-full max-w-6xl mx-auto">
+      <PageHeader
+        kicker="ARŞİV"
+        title="Tweet geçmişi ve performans döngüsü"
+        subtitle="Kaydedilen tweetleri, reply arşivini ve X verisiyle senkronize edilen performansı tek ekranda gör."
+        chips={[
+          { label: `Toplam: ${analytics.total}`, tone: 'neutral' },
+          { label: `Atılan: ${analytics.posted}`, tone: 'green' },
+          { label: `Ort. skor: ${analytics.avgScore}`, tone: 'accent' },
+        ]}
+        actions={
+          <button
+            onClick={syncFromX}
+            disabled={syncing}
+            className="primary-button"
+          >
+            {syncing ? 'Senkronize...' : "X'ten güncelle"}
+          </button>
+        }
+      />
 
       {/* ── Üst bar ── */}
       <div className="flex items-start gap-3">

@@ -14,11 +14,59 @@
  * (tweets vs items, likes vs favoriteCount vb.) birden fazla alternatif kontrol edilir.
  */
 const BASE = '/xquik';
+const RATE_LIMIT_COOLDOWN_MS = 60_000;
+let searchTweetsCooldownUntil = 0;
+let searchTweetsCooldownReason = '';
 
 const headers = (apiKey: string) => ({
   'Content-Type': 'application/json',
   'x-api-key': apiKey,
 });
+
+function extractMediaUrls(t: any): string[] {
+  const urls = [
+    ...(Array.isArray(t?.media) ? t.media.flatMap((m: any) => [
+      m?.url,
+      m?.media_url_https,
+      m?.mediaUrl,
+      m?.previewImageUrl,
+      m?.thumbUrl,
+      m?.thumbnailUrl,
+    ]) : []),
+    ...(Array.isArray(t?.extended_entities?.media) ? t.extended_entities.media.flatMap((m: any) => [
+      m?.media_url_https,
+      m?.mediaUrl,
+      m?.url,
+      m?.media_url,
+    ]) : []),
+    t?.imageUrl,
+    t?.image_url,
+    t?.thumbnailUrl,
+    t?.thumbnail_url,
+    t?.previewImageUrl,
+    t?.preview_image_url,
+    t?.videoThumbnailUrl,
+    t?.video_thumbnail_url,
+    t?.videoUrl,
+    t?.video_url,
+    t?.mediaUrl,
+    t?.media_url,
+    t?.quotedMedia?.url,
+  ]
+    .flat()
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+
+  return [...new Set(urls)];
+}
+
+function extractMediaPreviewUrl(t: any): string | undefined {
+  const urls = extractMediaUrls(t);
+  if (urls.length > 0) return urls[0];
+  if (typeof t?.video === 'string') return t.video;
+  if (typeof t?.videoUrl === 'string') return t.videoUrl;
+  if (typeof t?.mediaType === 'string' && t.mediaType === 'photo' && typeof t?.imageUrl === 'string') return t.imageUrl;
+  return undefined;
+}
 
 // ─── Mevcut ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +102,17 @@ export interface TweetSearchResult {
   replies: number;
   retweets: number;
   views?: number;
+  hasMedia?: boolean;
+  mediaType?: string;
+  isVideo?: boolean;
+  mediaPreviewUrl?: string;
+  mediaUrls?: string[];
+  bookmarkCount?: number;
+  quotedText?: string;
+  quotedAuthor?: string;
+  quotedAuthorHandle?: string;
+  quotedUrl?: string;
+  quotedMediaPreviewUrl?: string;
   createdAt: string;
   url: string;
 }
@@ -67,6 +126,14 @@ export interface UserTweet {
   replies: number;
   retweets: number;
   views?: number;
+  bookmarkCount?: number;
+  mediaPreviewUrl?: string;
+  mediaUrls?: string[];
+  quotedText?: string;
+  quotedAuthor?: string;
+  quotedAuthorHandle?: string;
+  quotedUrl?: string;
+  quotedMediaPreviewUrl?: string;
   createdAt: string;
 }
 
@@ -267,29 +334,49 @@ export const xquikApi = {
     options: {
       minFaves?: number;
       minReplies?: number;
+      minRetweets?: number;
+      minBookmarks?: number;
       lang?: string;
       hours?: number;
       limit?: number;
     } = {}
   ): Promise<TweetSearchResult[]> {
     if (!apiKey) return [];
+    if (Date.now() < searchTweetsCooldownUntil) {
+      return [];
+    }
     try {
-      const { minFaves = 10, lang = 'tr' } = options;
+      const { minFaves = 10, minReplies = 0, minRetweets = 0, minBookmarks = 0, lang = 'tr', hours, limit = 20 } = options;
       // GET endpoint — sadece q parametresi, X search operatörleriyle
       let q = query;
       if (lang) q += ` lang:${lang}`;
       if (minFaves > 0) q += ` min_faves:${minFaves}`;
+      if (hours && hours > 0) {
+        const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+        q += ` since:${since.toISOString().slice(0, 10)}`;
+      }
       const params = new URLSearchParams({ q });
       const res = await fetch(`${BASE}/x/tweets/search?${params}`, {
         headers: headers(apiKey),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
-        console.error(`[xquik] searchTweets ${res.status}:`, body);
+        if (res.status === 429) {
+          searchTweetsCooldownUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+          searchTweetsCooldownReason = body.includes('Cloudflare') || body.includes('Access denied')
+            ? 'Cloudflare rate limit'
+            : 'xquik rate limit';
+          console.warn(`[xquik] searchTweets rate-limited: ${searchTweetsCooldownReason}`);
+        } else {
+          console.error(`[xquik] searchTweets ${res.status}:`, body.slice(0, 300));
+        }
         return [];
       }
       const data = await res.json();
-      return (data.tweets || data.items || data.results || []).map((t: any) => ({
+      const rawItems = data.tweets || data.items || data.results || [];
+      const items = rawItems.map((t: any) => {
+        const quoted = t.quotedTweet || t.quoted_status || t.quotedStatus || t.quoted || null;
+        return {
         id: t.id || t.tweetId || '',
         text: t.text || t.content || '',
         author: t.author?.name || t.authorName || t.user?.name || '',
@@ -298,9 +385,54 @@ export const xquikApi = {
         replies: t.replyCount || t.replies || 0,
         retweets: t.retweetCount || t.retweets || 0,
         views: t.viewCount || t.views,
-        createdAt: t.createdAt || t.created_at || '',
+        bookmarkCount: t.bookmarkCount || t.bookmarks || t.saveCount,
+        hasMedia: Boolean(
+          t.hasMedia ||
+          t.media?.length ||
+          t.mediaType ||
+          t.videoUrl ||
+          t.video ||
+          t.quotedMedia
+        ),
+        mediaType: t.mediaType || t.media?.[0]?.type || t.extended_entities?.media?.[0]?.type || (t.videoUrl || t.video ? 'video' : undefined),
+        isVideo: Boolean(t.isVideo || t.mediaType === 'video' || t.videoUrl || t.video),
+        mediaPreviewUrl: extractMediaPreviewUrl(t),
+        mediaUrls: extractMediaUrls(t),
+        quotedText: quoted?.text || quoted?.full_text || quoted?.content || '',
+        quotedAuthor: quoted?.author?.name || quoted?.authorName || quoted?.user?.name || '',
+        quotedAuthorHandle: quoted?.author?.username || quoted?.authorHandle || quoted?.user?.username || '',
+        quotedUrl: quoted?.url || (quoted?.id ? `https://x.com/i/web/status/${quoted.id}` : ''),
+        quotedMediaPreviewUrl: quoted ? extractMediaPreviewUrl(quoted) : undefined,
+        createdAt: (() => {
+          const raw = t.createdAt || t.created_at || t.timestamp || t.time || t.date || t.publishedAt || t.postedAt || t.tweetCreatedAt || '';
+          if (!raw) return '';
+          const n = Number(raw);
+          if (!isNaN(n) && n > 1000000000) return new Date(n < 1e12 ? n * 1000 : n).toISOString();
+          const d = new Date(String(raw));
+          return isNaN(d.getTime()) ? '' : d.toISOString();
+        })(),
         url: t.url || `https://x.com/i/web/status/${t.id || t.tweetId}`,
-      }));
+        };
+      });
+
+      const cutoff = hours && hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : 0;
+      const filtered = items
+        .filter((t: TweetSearchResult) => {
+          const created = t.createdAt ? Date.parse(t.createdAt) : NaN;
+          const recentOk = !cutoff || Number.isNaN(created) || created >= cutoff;
+          return recentOk
+            && t.likes >= minFaves
+            && (t.replies || 0) >= minReplies
+            && (t.retweets || 0) >= minRetweets
+            && (minBookmarks <= 0 || (t.bookmarkCount || 0) >= minBookmarks);
+        })
+        .sort((a: TweetSearchResult, b: TweetSearchResult) => {
+          const scoreA = (a.likes || 0) + (a.replies || 0) * 5 + (a.retweets || 0) * 2 + (a.views ? Math.round(a.views / 100) : 0);
+          const scoreB = (b.likes || 0) + (b.replies || 0) * 5 + (b.retweets || 0) * 2 + (b.views ? Math.round(b.views / 100) : 0);
+          return scoreB - scoreA;
+        });
+
+      return filtered.slice(0, limit);
     } catch (e) {
       console.error('[xquik] searchTweets error:', e);
       return [];
@@ -308,7 +440,7 @@ export const xquikApi = {
   },
 
   // ── Trending Topics ──────────────────────────────────────────────────────────
-  async getTrends(apiKey: string, count = 20): Promise<TrendItem[]> {
+  async getTrends(apiKey: string, _count = 20): Promise<TrendItem[]> {
     if (!apiKey) return [];
     try {
       // woeid=23424969 → Türkiye
@@ -363,7 +495,9 @@ export const xquikApi = {
       const res = await fetch(url, { headers: headers(apiKey) });
       if (!res.ok) return [];
       const data = await res.json();
-      return (data.tweets || []).map((t: any) => ({
+      return (data.tweets || []).map((t: any) => {
+        const quoted = t.quotedTweet || t.quoted_status || t.quotedStatus || t.quoted || null;
+        return {
         id: t.id || '',
         text: t.text || '',
         author: t.author?.name || t.authorName || '',
@@ -372,9 +506,21 @@ export const xquikApi = {
         replies: t.replyCount || t.replies || 0,
         retweets: t.retweetCount || t.retweets || 0,
         views: t.viewCount || t.views,
+        bookmarkCount: t.bookmarkCount || t.bookmarks || t.saveCount,
+        hasMedia: Boolean(t.hasMedia || t.media?.length || t.mediaType || t.videoUrl || t.video || t.quotedMedia),
+        mediaType: t.mediaType || t.media?.[0]?.type || t.extended_entities?.media?.[0]?.type || (t.videoUrl || t.video ? 'video' : undefined),
+        isVideo: Boolean(t.isVideo || t.mediaType === 'video' || t.videoUrl || t.video),
+        mediaPreviewUrl: extractMediaPreviewUrl(t),
+        mediaUrls: extractMediaUrls(t),
+        quotedText: quoted?.text || quoted?.full_text || quoted?.content || '',
+        quotedAuthor: quoted?.author?.name || quoted?.authorName || quoted?.user?.name || '',
+        quotedAuthorHandle: quoted?.author?.username || quoted?.authorHandle || quoted?.user?.username || '',
+        quotedUrl: quoted?.url || (quoted?.id ? `https://x.com/i/web/status/${quoted.id}` : ''),
+        quotedMediaPreviewUrl: quoted ? extractMediaPreviewUrl(quoted) : undefined,
         createdAt: t.createdAt || '',
         url: t.url || `https://x.com/i/web/status/${t.id}`,
-      }));
+        };
+      });
     } catch {
       return [];
     }
@@ -654,15 +800,26 @@ export const xquikApi = {
         return [];
       }
       const data = await res.json();
-      return (data.tweets || data.items || data.results || []).map((t: any) => ({
+      return (data.tweets || data.items || data.results || []).map((t: any) => {
+        const quoted = t.quotedTweet || t.quoted_status || t.quotedStatus || t.quoted || null;
+        return {
         id: t.id || '',
         text: t.text || '',
         likes: t.likeCount ?? t.likes ?? t.favoriteCount ?? 0,
         replies: t.replyCount ?? t.replies ?? 0,
         retweets: t.retweetCount ?? t.retweets ?? 0,
         views: t.viewCount ?? t.views,
+        bookmarkCount: t.bookmarkCount ?? t.bookmarks ?? t.saveCount,
+        mediaPreviewUrl: extractMediaPreviewUrl(t),
+        mediaUrls: extractMediaUrls(t),
+        quotedText: quoted?.text || quoted?.full_text || quoted?.content || '',
+        quotedAuthor: quoted?.author?.name || quoted?.authorName || quoted?.user?.name || '',
+        quotedAuthorHandle: quoted?.author?.username || quoted?.authorHandle || quoted?.user?.username || '',
+        quotedUrl: quoted?.url || (quoted?.id ? `https://x.com/i/web/status/${quoted.id}` : ''),
+        quotedMediaPreviewUrl: quoted ? extractMediaPreviewUrl(quoted) : undefined,
         createdAt: t.createdAt || '',
-      }));
+        };
+      });
     } catch {
       return [];
     }

@@ -33,19 +33,19 @@ function NavItem({ item, active, onClick }: {
       onClick={onClick}
       title={item.desc}
       className={`
-        relative w-full text-left px-3 py-2.5 rounded-xl text-sm transition-all duration-150
-        flex items-center gap-2.5 group overflow-hidden
+        relative w-full text-left px-3.5 py-3 rounded-2xl text-sm transition-all duration-200
+        flex items-center gap-2.5 group overflow-hidden border border-transparent
         ${active
-          ? 'bg-gradient-to-r from-accent/[0.15] to-accent/[0.05] text-accent'
-          : 'text-[#5a5a65] hover:text-[#c8c8c0] hover:bg-white/[0.05]'
+          ? 'bg-gradient-to-r from-accent/[0.18] via-white/[0.03] to-accent/[0.06] text-[#f4f4ee] border-white/[0.08] shadow-[0_12px_30px_rgba(0,0,0,0.22)]'
+          : 'text-[#6b6b76] hover:text-[#f0f0e8] hover:bg-white/[0.045] hover:border-white/[0.06]'
         }
       `}
     >
       {/* Active left border glow */}
       {active && (
-        <span className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-accent shadow-[0_0_8px_#7c6af7]" />
+        <span className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-gradient-to-b from-accent to-accent-green shadow-[0_0_12px_rgba(138,124,255,0.75)]" />
       )}
-      <span className={`text-base w-5 text-center shrink-0 transition-transform duration-150 group-hover:scale-110 ${active ? 'drop-shadow-[0_0_6px_rgba(124,106,247,0.7)]' : ''}`}>
+      <span className={`text-base w-5 text-center shrink-0 transition-transform duration-200 group-hover:scale-110 ${active ? 'drop-shadow-[0_0_8px_rgba(138,124,255,0.7)]' : ''}`}>
         {item.icon}
       </span>
       <span className="font-medium text-[13px] tracking-tight">{item.label}</span>
@@ -70,18 +70,25 @@ export default function App() {
   }[statusLevel];
 
   return (
-    <div className="flex h-screen bg-[#09090b] text-[#e8e8e0] overflow-hidden">
+    <div className="app-shell p-3 sm:p-4">
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="absolute -left-24 top-[-6rem] h-80 w-80 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute right-[-4rem] top-24 h-72 w-72 rounded-full bg-accent-green/8 blur-3xl" />
+        <div className="absolute bottom-[-7rem] left-1/3 h-80 w-80 rounded-full bg-[#6b8cff]/6 blur-3xl" />
+      </div>
+
+      <div className="relative flex h-full flex-col lg:flex-row overflow-hidden rounded-[32px] border border-white/[0.06] bg-white/[0.02] shadow-[0_30px_110px_rgba(0,0,0,0.42)] ring-1 ring-white/[0.03] backdrop-blur-2xl">
 
       {/* Sidebar */}
-      <aside className="w-[230px] shrink-0 flex flex-col relative"
+      <aside className="w-full lg:w-[248px] shrink-0 flex flex-col relative bg-[#0b0e14]/90 backdrop-blur-xl max-h-[42vh] lg:max-h-none overflow-y-auto lg:overflow-visible"
         style={{
-          background: 'linear-gradient(180deg, #0f0f12 0%, #0c0c0e 100%)',
-          borderRight: '1px solid rgba(255,255,255,0.055)',
+          background: 'linear-gradient(180deg, rgba(13,15,22,0.96) 0%, rgba(9,10,14,0.94) 100%)',
+          borderRight: '1px solid rgba(255,255,255,0.07)',
         }}
       >
         {/* Subtle top glow */}
         <div className="absolute top-0 left-0 right-0 h-32 pointer-events-none"
-          style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(124,106,247,0.08) 0%, transparent 70%)' }}
+          style={{ background: 'radial-gradient(ellipse at 50% 0%, rgba(138,124,255,0.12) 0%, transparent 72%)' }}
         />
 
         {/* Logo */}
@@ -89,9 +96,9 @@ export default function App() {
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl flex items-center justify-center text-sm shrink-0"
               style={{
-                background: 'linear-gradient(135deg, rgba(124,106,247,0.25) 0%, rgba(124,106,247,0.1) 100%)',
-                border: '1px solid rgba(124,106,247,0.3)',
-                boxShadow: '0 0 12px rgba(124,106,247,0.15)',
+                background: 'linear-gradient(135deg, rgba(138,124,255,0.28) 0%, rgba(138,124,255,0.08) 100%)',
+                border: '1px solid rgba(138,124,255,0.32)',
+                boxShadow: '0 0 18px rgba(138,124,255,0.16)',
               }}
             >
               ⚡
@@ -123,8 +130,8 @@ export default function App() {
         </div>
 
         {/* Status */}
-        <div className="mx-3 mb-3 rounded-xl px-3 py-2.5 space-y-1.5"
-          style={{ background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.055)' }}
+        <div className="mx-3 mb-3 rounded-2xl px-3 py-3 space-y-1.5 border"
+          style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}
         >
           <div className="flex items-center gap-2">
             <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusInfo.dot}`} />
@@ -144,7 +151,7 @@ export default function App() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-hidden bg-[#09090b]">
+      <main className="relative flex-1 min-h-0 overflow-hidden bg-transparent">
         {page === 'generate'  && <Generate />}
         {page === 'replies'   && <Replies />}
         {page === 'history'   && <History />}
@@ -153,6 +160,7 @@ export default function App() {
         {page === 'guide'     && <Guide />}
         {page === 'settings'  && <Settings />}
       </main>
+      </div>
 
     </div>
   );

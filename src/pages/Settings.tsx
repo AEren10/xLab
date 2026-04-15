@@ -3,6 +3,8 @@ import { db } from '../lib/db';
 import type { Settings as SettingsType, AccountProfile } from '../lib/db';
 import { claudeApi } from '../lib/claude';
 import { xquikApi } from '../lib/xquik';
+import { saveCachedPersona } from '../lib/persona';
+import { PageHeader } from '../components/PageHeader';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -35,7 +37,156 @@ function Field({ label, badge, hint, children }: {
   );
 }
 
+function SettingsRail({
+  settings,
+  profiles,
+  xquikTest,
+  claudeTest,
+  xquikAccount,
+  activeProfile,
+  personaRefreshMsg,
+  refreshingPersonaId,
+  onTestClaude,
+  onTestXquik,
+  onRefreshPersona,
+  onAddProfile,
+}: {
+  settings: SettingsType;
+  profiles: AccountProfile[];
+  xquikTest: { status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string };
+  claudeTest: { status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string };
+  xquikAccount: { subscription?: string; credits?: number; creditsUsed?: number } | null;
+  activeProfile: AccountProfile | null;
+  personaRefreshMsg: string;
+  refreshingPersonaId: string | null;
+  onTestClaude: () => void;
+  onTestXquik: () => void;
+  onRefreshPersona: () => void;
+  onAddProfile: () => void;
+}) {
+  const statusRow = [
+    {
+      label: 'Claude',
+      value: settings.claudeKey ? 'hazır' : 'boş',
+      tone: settings.claudeKey ? 'text-accent-green' : 'text-[#8b8b96]',
+      detail: claudeTest.status === 'ok' ? claudeTest.msg : claudeTest.status === 'error' ? claudeTest.msg : 'Tweet üretimi / prompt akışı',
+    },
+    {
+      label: 'xquik',
+      value: settings.xquikKey ? 'hazır' : 'boş',
+      tone: settings.xquikKey ? 'text-accent-green' : 'text-[#8b8b96]',
+      detail: xquikTest.status === 'ok' ? xquikTest.msg : xquikTest.status === 'error' ? xquikTest.msg : 'Radar, reply ve keşif havuzu',
+    },
+    { label: 'Profil', value: `${profiles.length}`, tone: 'text-accent', detail: 'Aktif persona cache ve hesap profilleri' },
+  ];
+
+  return (
+    <aside className="space-y-3 xl:sticky xl:top-3">
+      <div className="premium-panel-strong p-4 space-y-4">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.16em] text-[#4a4a55]">Çalışma Özeti</p>
+          <h3 className="mt-1 text-sm font-semibold text-[#e8e8e0]">Ayarlar, bağlam ve persona tek yerde</h3>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-[#6b6b72]">
+            Sol tarafta bağlantılar ve profiller, sağ tarafta anlık durum ve hızlı aksiyonlar var. Böylece ekran
+            yarım kalmıyor.
+          </p>
+        </div>
+
+        <div className="grid gap-2">
+          {statusRow.map((item) => (
+            <div key={item.label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[10px] uppercase tracking-[0.14em] text-[#4a4a55]">{item.label}</span>
+                <span className={`text-[11px] font-semibold ${item.tone}`}>{item.value}</span>
+              </div>
+              <p className="mt-1 text-[10px] leading-relaxed text-[#6b6b72]">{item.detail}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="premium-panel p-4 space-y-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-[0.16em] text-[#4a4a55]">Aktif Profil</p>
+          <h3 className="mt-1 text-sm font-semibold text-[#e8e8e0]">
+            {activeProfile?.label || 'Profil seçilmedi'}
+          </h3>
+          <p className="mt-1 text-[11px] leading-relaxed text-[#6b6b72]">
+            {activeProfile?.niche ? `Niche: ${activeProfile.niche}` : 'Niche tanımlı değil. Varsayılan persona kullanılıyor.'}
+          </p>
+        </div>
+
+        <div className="grid gap-2">
+          <button
+            onClick={onRefreshPersona}
+            disabled={refreshingPersonaId != null}
+            className="w-full rounded-xl border border-accent/20 bg-accent/10 px-3 py-2 text-xs font-medium text-accent transition-colors hover:bg-accent/15 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {refreshingPersonaId ? 'Persona yenileniyor...' : 'Persona Yenile'}
+          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={onTestXquik}
+              className="rounded-xl border border-accent-green/15 bg-accent-green/10 px-3 py-2 text-xs font-medium text-accent-green transition-colors hover:bg-accent-green/15"
+            >
+              xquik test et
+            </button>
+            <button
+              onClick={onTestClaude}
+              className="rounded-xl border border-accent-yellow/15 bg-accent-yellow/10 px-3 py-2 text-xs font-medium text-accent-yellow transition-colors hover:bg-accent-yellow/15"
+            >
+              Claude test et
+            </button>
+          </div>
+          <button
+            onClick={onAddProfile}
+            className="rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-xs font-medium text-[#e8e8e0] transition-colors hover:bg-white/[0.06]"
+          >
+            + Yeni profil oluştur
+          </button>
+        </div>
+
+        {xquikAccount && (
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 space-y-2">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-[#4a4a55]">xquik Durumu</p>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                <p className="text-[9px] uppercase tracking-[0.12em] text-[#4a4a55]">Plan</p>
+                <p className="mt-1 text-[11px] text-[#e8e8e0]">{xquikAccount.subscription || '—'}</p>
+              </div>
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                <p className="text-[9px] uppercase tracking-[0.12em] text-[#4a4a55]">Kredi</p>
+                <p className="mt-1 text-[11px] text-accent-green">{xquikAccount.credits?.toLocaleString() || '—'}</p>
+              </div>
+              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-2">
+                <p className="text-[9px] uppercase tracking-[0.12em] text-[#4a4a55]">Kullanım</p>
+                <p className="mt-1 text-[11px] text-[#e8e8e0]">{xquikAccount.creditsUsed?.toLocaleString() || '—'}</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {personaRefreshMsg && (
+          <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-3">
+            <p className="text-[10px] uppercase tracking-[0.14em] text-[#4a4a55]">Durum Mesajı</p>
+            <p className="mt-1 text-[11px] leading-relaxed text-[#8b8b96]">{personaRefreshMsg}</p>
+          </div>
+        )}
+
+        <div className="rounded-xl border border-accent/15 bg-accent/[0.03] p-3">
+          <p className="text-[10px] uppercase tracking-[0.14em] text-accent">Hızlı Not</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-[#c8c8d0]">
+            Persona yenileme, seçili profilin son tweetlerini çekip cache'i günceller. Generate tarafında bu
+            değişiklik anında hissedilir.
+          </p>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
 const PERSONA_OPTIONS = [
+  { value: 'alperk55',        label: 'alperk55 — Mizahi, tarafsız görün taraf ima et' },
   { value: 'hurricane',       label: 'hurricane — Bold, soru sorduran, cesur' },
   { value: 'tr_educational',  label: 'tr_educational — Öğretici, adım adım' },
   { value: 'tr_controversial',label: 'tr_controversial — Tartışma açan' },
@@ -230,6 +381,8 @@ export function Settings() {
   const [claudeTest, setClaudeTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string }>({ status: 'idle' });
   const [xquikTest, setXquikTest] = useState<{ status: 'idle' | 'loading' | 'ok' | 'error'; msg?: string }>({ status: 'idle' });
   const [xquikAccount, setXquikAccount] = useState<{ subscription?: string; credits?: number; creditsUsed?: number } | null>(null);
+  const [refreshingPersonaId, setRefreshingPersonaId] = useState<string | null>(null);
+  const [personaRefreshMsg, setPersonaRefreshMsg] = useState('');
 
   const testClaude = async () => {
     if (!settings.claudeKey) return;
@@ -287,15 +440,77 @@ export function Settings() {
     setProfiles(db.getProfiles());
   };
 
+  const handleRefreshPersona = async (profile: AccountProfile | null = null) => {
+    const target = profile || db.getActiveProfile();
+    const handle = target.twitterUsername || settings.twitterUsername;
+
+    if (!settings.claudeKey || !settings.xquikKey || !handle) {
+      setPersonaRefreshMsg('Persona yenilemek için xquik + Claude key ve Twitter kullanıcı adı gerekli.');
+      return;
+    }
+
+    setRefreshingPersonaId(target.defaultPersona || settings.defaultPersona || 'hurricane');
+    setPersonaRefreshMsg('');
+
+    try {
+      const tweets = await xquikApi.getUserTweets(settings.xquikKey, handle, 20);
+      if (!tweets.length) {
+        setPersonaRefreshMsg('Bu hesap için X tweeti alınamadı.');
+        return;
+      }
+
+      const topTweets = [...tweets]
+        .sort((a, b) => {
+          const scoreA = a.likes + a.replies * 5 + a.retweets * 2 + (a.views ? Math.round(a.views / 100) : 0);
+          const scoreB = b.likes + b.replies * 5 + b.retweets * 2 + (b.views ? Math.round(b.views / 100) : 0);
+          return scoreB - scoreA;
+        })
+        .slice(0, 5);
+
+      const generated = await claudeApi.buildPersonaFromTweets(
+        settings.claudeKey,
+        handle.replace('@', ''),
+        topTweets.map((t) => ({
+          text: t.text,
+          likes: t.likes,
+          replies: t.replies,
+          retweets: t.retweets,
+        })),
+        target.niche ? `Niche: ${target.niche}` : ''
+      );
+
+      if (!generated) {
+        setPersonaRefreshMsg('Persona üretilemedi. API yanıtını kontrol et.');
+        return;
+      }
+
+      saveCachedPersona(target.defaultPersona || settings.defaultPersona || 'hurricane', generated as Record<string, any>, 'generated');
+      setPersonaRefreshMsg(`Persona güncellendi: ${target.label}`);
+    } catch (e: any) {
+      setPersonaRefreshMsg(e?.message || 'Persona yenileme başarısız oldu.');
+    } finally {
+      setRefreshingPersonaId(null);
+      setTimeout(() => setPersonaRefreshMsg(''), 5000);
+    }
+  };
+
   const inputCls = "w-full bg-[#111113] border border-white/[0.07] rounded-xl px-3 py-2.5 text-sm text-[#e8e8e0] placeholder-[#3a3a45] focus:border-accent/40 focus:bg-[#111115] transition-all";
 
   return (
-    <div className="p-6 max-w-xl overflow-y-auto h-full space-y-8">
-
-      <div>
-        <h1 className="text-base font-semibold text-[#e8e8e0]">Ayarlar</h1>
-        <p className="text-xs text-[#4a4a55] mt-0.5">Tüm veriler tarayıcında, hiçbir yere gönderilmiyor</p>
-      </div>
+    <div className="page-shell p-3 h-full overflow-y-auto">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px] items-start">
+        <div className="space-y-3 min-w-0">
+      <PageHeader
+        kicker="AYARLAR"
+        title="API, persona ve hesap profilleri"
+        subtitle="Bağlantıları, varsayılan hesapları ve öğrenen persona cache’ini buradan yönet."
+        chips={[
+          { label: settings.claudeKey ? 'Claude bağlı' : 'Claude boş', tone: settings.claudeKey ? 'green' : 'orange' },
+          { label: settings.xquikKey ? 'xquik bağlı' : 'xquik boş', tone: settings.xquikKey ? 'green' : 'orange' },
+          { label: `${profiles.length} profil`, tone: 'neutral' },
+          { label: db.getActiveProfile()?.label || 'aktif profil yok', tone: db.getActiveProfile() ? 'accent' : 'neutral' },
+        ]}
+      />
 
       {/* ── API Bağlantıları ── */}
       <Section title="API Bağlantıları">
@@ -384,6 +599,21 @@ export function Settings() {
         <p className="text-[11px] text-[#6b6b72] -mt-2 leading-relaxed">
           Her hesap için ayrı niche, persona ve ton ayarı. Generate sayfasında istediğin profili seçebilirsin.
         </p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-[10px] text-[#4a4a55] leading-relaxed">
+            Seçili hesabın tweetlerini çekip persona cache'ini günceller.
+          </p>
+          <button
+            onClick={() => handleRefreshPersona(db.getActiveProfile())}
+            disabled={refreshingPersonaId != null}
+            className="text-[10px] px-3 py-1.5 rounded-lg bg-accent/10 hover:bg-accent/20 text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-colors shrink-0"
+          >
+            {refreshingPersonaId ? 'Yenileniyor...' : 'Persona Yenile'}
+          </button>
+        </div>
+        {personaRefreshMsg && (
+          <p className="text-[10px] text-[#8b8b96]">{personaRefreshMsg}</p>
+        )}
 
         {profiles.length === 0 && (
           <div className="text-center py-6 border border-dashed border-white/[0.07] rounded-xl">
@@ -542,6 +772,23 @@ export function Settings() {
             </li>
           ))}
         </ul>
+      </div>
+        </div>
+
+        <SettingsRail
+          settings={settings}
+          profiles={profiles}
+          xquikTest={xquikTest}
+          claudeTest={claudeTest}
+          xquikAccount={xquikAccount}
+          activeProfile={db.getActiveProfile()}
+          personaRefreshMsg={personaRefreshMsg}
+          refreshingPersonaId={refreshingPersonaId}
+          onTestClaude={testClaude}
+          onTestXquik={testXquik}
+          onRefreshPersona={() => handleRefreshPersona(db.getActiveProfile())}
+          onAddProfile={handleAddProfile}
+        />
       </div>
     </div>
   );

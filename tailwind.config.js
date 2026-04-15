@@ -4,14 +4,14 @@ export default {
   theme: {
     extend: {
       colors: {
-        bg: '#0a0a0b',
-        card: '#111113',
-        elevated: '#18181c',
-        accent: '#7c6af7',
-        'accent-green': '#4ade80',
-        'accent-yellow': '#facc15',
-        'accent-orange': '#fb923c',
-        'accent-red': '#f87171',
+        bg: '#07080b',
+        card: '#10141b',
+        elevated: '#171c26',
+        accent: '#8a7cff',
+        'accent-green': '#55d691',
+        'accent-yellow': '#f2c95e',
+        'accent-orange': '#ff9f57',
+        'accent-red': '#ff7d7d',
       },
     },
   },

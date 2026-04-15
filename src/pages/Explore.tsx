@@ -6,6 +6,10 @@ import { useState, useEffect } from 'react';
 import { db } from '../lib/db';
 import { xquikApi } from '../lib/xquik';
 import type { TrendItem, TweetSearchResult, StylePerformance, Monitor, UserProfile } from '../lib/xquik';
+import type { ExternalTrends } from '../lib/xquik';
+import { RadarPanel } from '../components/RadarPanel';
+import { ExternalTrendsPanel } from '../components/ExternalTrendsPanel';
+import { PageHeader } from '../components/PageHeader';
 
 type Tab = 'trends' | 'timeline' | 'style' | 'monitors' | 'draws';
 
@@ -42,6 +46,12 @@ function TrendsTab({ apiKey }: { apiKey: string }) {
   const [trends, setTrends] = useState<TrendItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [externalTrends, setExternalTrends] = useState<ExternalTrends>({
+    reddit: [],
+    hackernews: [],
+    google: [],
+  });
+  const [externalLoading, setExternalLoading] = useState(false);
 
   useEffect(() => {
     if (!apiKey) return;
@@ -49,6 +59,15 @@ function TrendsTab({ apiKey }: { apiKey: string }) {
     xquikApi.getTrends(apiKey, 30).then((data) => {
       setTrends(data);
       setLoading(false);
+    });
+  }, [apiKey]);
+
+  useEffect(() => {
+    if (!apiKey) return;
+    setExternalLoading(true);
+    xquikApi.getExternalTrends(apiKey).then((data) => {
+      setExternalTrends(data);
+      setExternalLoading(false);
     });
   }, [apiKey]);
 
@@ -62,52 +81,101 @@ function TrendsTab({ apiKey }: { apiKey: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-[#e8e8e0]">X Trendleri</h2>
-          <p className="text-[11px] text-[#6b6b72] mt-0.5">Şu an X'te gündemde olanlar</p>
-        </div>
-        {!loading && trends.length > 0 && (
-          <span className="text-[10px] text-[#4a4a55] bg-white/[0.03] px-2 py-1 rounded-full border border-white/[0.06]">
-            {trends.length} trend
-          </span>
-        )}
-      </div>
-
-      {loading ? (
-        <LoadingSpinner label="Trendler yükleniyor..." />
-      ) : trends.length === 0 ? (
-        <EmptyState
-          icon="📡"
-          title="Trend verisi yok"
-          sub="xquik'ten trend çekilemedi. Hesabın bağlı mı kontrol et."
-        />
-      ) : (
-        <div className="grid gap-1.5">
-          {trends.map((trend, i) => (
-            <button
-              key={i}
-              onClick={() => copyTrend(trend.name)}
-              className="w-full text-left group flex items-start gap-3 px-3.5 py-3 rounded-xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-accent/20 transition-all"
-            >
-              <span className="text-[11px] text-[#4a4a55] w-6 shrink-0 pt-0.5 text-right font-mono">
-                {trend.rank ?? i + 1}
-              </span>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-[#e8e8e0] group-hover:text-accent transition-colors truncate">
-                  {trend.name}
-                </p>
-                {trend.description && (
-                  <p className="text-[10px] text-[#6b6b72] mt-0.5 truncate">{trend.description}</p>
-                )}
-              </div>
-              <span className="text-[10px] text-[#4a4a55] group-hover:text-accent/60 transition-colors shrink-0 mt-0.5">
-                {copied === trend.name ? '✓ kopyalandı' : 'kopyala →'}
-              </span>
-            </button>
-          ))}
+      {copied && (
+        <div className="text-[10px] text-accent-green bg-accent-green/[0.06] border border-accent-green/20 rounded-xl px-3 py-2">
+          Kopyalandı: <span className="font-medium text-[#e8e8e0]">{copied}</span>
         </div>
       )}
+
+      <div className="grid gap-3 xl:grid-cols-[1.05fr_0.95fr]">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-[#e8e8e0]">X Radar Başlıkları</h2>
+              <p className="text-[11px] text-[#6b6b72] mt-0.5">
+                xquik'in radarından gelen ham konu başlıkları. Bağlamı daraltmak için seç.
+              </p>
+            </div>
+            <span className="text-[10px] text-[#4a4a55] bg-white/[0.03] px-2 py-1 rounded-full border border-white/[0.06]">
+              xquik
+            </span>
+          </div>
+          <RadarPanel apiKey={apiKey} onSelect={copyTrend} featured />
+        </div>
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-[#e8e8e0]">Dünya Gündemi</h2>
+              <p className="text-[11px] text-[#6b6b72] mt-0.5">
+                Reddit, HN ve Google sıcaklıkları. Geniş bağlam almak için iyi.
+              </p>
+            </div>
+            <span className="text-[10px] text-[#4a4a55] bg-white/[0.03] px-2 py-1 rounded-full border border-white/[0.06]">
+              3 kaynak
+            </span>
+          </div>
+          {externalLoading ? (
+            <LoadingSpinner label="Dünya gündemi yükleniyor..." />
+          ) : (
+            <ExternalTrendsPanel
+              trends={externalTrends}
+              onSelect={copyTrend}
+              defaultOpen
+              featured
+            />
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-[#e8e8e0]">X Trendleri</h2>
+            <p className="text-[11px] text-[#6b6b72] mt-0.5">Şu an X'te gündemde olan resmi trend başlıkları.</p>
+          </div>
+          {!loading && trends.length > 0 && (
+            <span className="text-[10px] text-[#4a4a55] bg-white/[0.03] px-2 py-1 rounded-full border border-white/[0.06]">
+              {trends.length} trend
+            </span>
+          )}
+        </div>
+
+        {loading ? (
+          <LoadingSpinner label="Trendler yükleniyor..." />
+        ) : trends.length === 0 ? (
+          <EmptyState
+            icon="📡"
+            title="Trend verisi yok"
+            sub="xquik'ten trend çekilemedi. Hesabın bağlı mı kontrol et."
+          />
+        ) : (
+          <div className="grid gap-1.5">
+            {trends.map((trend, i) => (
+              <button
+                key={i}
+                onClick={() => copyTrend(trend.name)}
+                className="w-full text-left group flex items-start gap-3 px-3.5 py-3 rounded-xl bg-white/[0.02] border border-white/[0.05] hover:bg-white/[0.05] hover:border-accent/20 transition-all"
+              >
+                <span className="text-[11px] text-[#4a4a55] w-6 shrink-0 pt-0.5 text-right font-mono">
+                  {trend.rank ?? i + 1}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-[#e8e8e0] group-hover:text-accent transition-colors truncate">
+                    {trend.name}
+                  </p>
+                  {trend.description && (
+                    <p className="text-[10px] text-[#6b6b72] mt-0.5 truncate">{trend.description}</p>
+                  )}
+                </div>
+                <span className="text-[10px] text-[#4a4a55] group-hover:text-accent/60 transition-colors shrink-0 mt-0.5">
+                  {copied === trend.name ? '✓ kopyalandı' : 'kopyala →'}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -713,7 +781,7 @@ function NoKey() {
 // ─── Ana sayfa ────────────────────────────────────────────────────────────────
 
 const TABS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'trends',   label: 'Trendler',     icon: '📈' },
+  { id: 'trends',   label: 'Keşif',        icon: '🧭' },
   { id: 'timeline', label: 'Timeline',      icon: '🌊' },
   { id: 'style',    label: 'Style',         icon: '📊' },
   { id: 'monitors', label: 'İzlemeler',     icon: '📡' },
@@ -726,22 +794,21 @@ export function Explore() {
   const apiKey = settings.xquikKey;
 
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      {/* Header */}
-      <div className="px-6 pt-5 pb-0 shrink-0">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h1 className="text-base font-semibold text-[#e8e8e0]">Keşfet</h1>
-            <p className="text-[11px] text-[#6b6b72] mt-0.5">xquik Starter — tüm özellikler</p>
-          </div>
-          {apiKey && (
-            <span className="text-[9px] px-2 py-1 rounded-full bg-accent-green/10 text-accent-green border border-accent-green/20">
-              xquik aktif
-            </span>
-          )}
-        </div>
+    <div className="page-shell flex h-full flex-col gap-3 p-3 overflow-hidden">
+      <PageHeader
+        kicker="KEŞFET"
+        title="Gündem, radar ve araçlar"
+        subtitle="X radar başlıkları, dünya gündemi ve izleme araçlarını tek merkezde kullan."
+        chips={[
+          { label: apiKey ? 'xquik aktif' : 'xquik kapalı', tone: apiKey ? 'green' : 'orange' },
+          { label: 'Radar', tone: 'neutral' },
+          { label: 'Dünya', tone: 'neutral' },
+          { label: 'Araçlar', tone: 'accent' },
+        ]}
+      />
 
-        {/* Tabs */}
+      {/* Tabs */}
+      <div className="premium-panel px-3 pt-2 pb-0 shrink-0">
         <div className="flex gap-0.5 border-b border-white/[0.06]">
           {TABS.map((t) => (
             <button
@@ -749,7 +816,7 @@ export function Explore() {
               onClick={() => setTab(t.id)}
               className={`flex items-center gap-1.5 px-3.5 py-2.5 text-[11px] font-medium border-b-2 transition-all -mb-px ${
                 tab === t.id
-                  ? 'border-accent text-accent'
+                  ? 'border-accent text-accent bg-white/[0.03]'
                   : 'border-transparent text-[#6b6b72] hover:text-[#e8e8e0]'
               }`}
             >

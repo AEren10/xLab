@@ -13,6 +13,7 @@
 
 import { useMemo } from 'react';
 import { db } from '../lib/db';
+import { PageHeader } from '../components/PageHeader';
 
 const DAY_LABELS = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
 const DAY_FULL   = ['Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi', 'Pazar'];
@@ -104,7 +105,17 @@ export function Analytics() {
   }
 
   return (
-    <div className="p-4 space-y-5 overflow-y-auto h-full max-w-5xl mx-auto">
+    <div className="page-shell p-3 space-y-3 overflow-y-auto h-full max-w-6xl mx-auto">
+      <PageHeader
+        kicker="ZAMANLAMA"
+        title="Paylaşım saatleri ve günleri"
+        subtitle="Kendi performans verine göre en iyi saatleri, günleri ve sıcak bölgeleri tek bakışta gör."
+        chips={[
+          { label: `Toplam: ${totalPosted}`, tone: 'neutral' },
+          { label: bestHour >= 0 ? `En iyi saat: ${fmtHour(bestHour)}` : 'En iyi saat: yok', tone: 'green' },
+          { label: bestDay >= 0 ? `En iyi gün: ${DAY_FULL[bestDay]}` : 'En iyi gün: yok', tone: 'accent' },
+        ]}
+      />
 
       {/* Başlık */}
       <div className="flex items-center justify-between">

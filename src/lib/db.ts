@@ -39,14 +39,13 @@ export interface AccountProfile {
 export interface Settings {
   xquikKey: string;
   claudeKey: string;
-  // Aktif profil ID — profil seçilince burası güncellenir
   activeProfileId: string;
-  // Legacy alanlar — profil sistemi yokken kullanılıyordu, geriye dönük uyumluluk için
   niche: string;
   defaultPersona: string;
   toneProfile: string;
   twitterUsername: string;
   hasPremium: boolean;
+  monitoredAccounts: string[];
 }
 
 const get = <T>(key: string, fallback: T): T => {
@@ -97,6 +96,7 @@ export const db = {
       toneProfile: '',
       twitterUsername: '',
       hasPremium: false,
+      monitoredAccounts: ['lemarcaspors_', 'bosunatiklama', 'demarkesports', 'futbolarena'],
     };
     const saved = get<Partial<Settings>>(KEYS.settings, {});
     return { ...defaults, ...saved, claudeKey: saved.claudeKey || envKey, xquikKey: saved.xquikKey || envXquik };
@@ -132,6 +132,7 @@ export const db = {
     const settings = get<Settings>(KEYS.settings, {
       xquikKey: '', claudeKey: '', activeProfileId: '',
       niche: '', defaultPersona: 'hurricane', toneProfile: '', twitterUsername: '', hasPremium: false,
+      monitoredAccounts: ['lemarcaspors_', 'bosunatiklama', 'demarkesports', 'futbolarena'],
     });
     const profiles = get<AccountProfile[]>(KEYS.profiles, []);
     const active = profiles.find((p) => p.id === settings.activeProfileId);
