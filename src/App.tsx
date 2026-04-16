@@ -55,7 +55,16 @@ function NavItem({ item, active, onClick }: {
 
 export default function App() {
   const [page, setPage] = useState<Page>('generate');
+  const [activeProfileId, setActiveProfileId] = useState(() => db.getSettings().activeProfileId || '');
+  const profiles = db.getProfiles();
   const settings = db.getSettings();
+
+  const switchProfile = (id: string) => {
+    db.saveSettings({ activeProfileId: id });
+    setActiveProfileId(id);
+  };
+
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? null;
 
   const statusLevel =
     settings.claudeKey && settings.xquikKey ? 'full' :
@@ -129,6 +138,42 @@ export default function App() {
           ))}
         </div>
 
+        {/* Profil Switcher */}
+        <div className="mx-3 mb-2">
+          <p className="text-[9px] font-semibold text-[#3a3a45] uppercase tracking-wider px-1 mb-1">Hesap</p>
+          <div className="space-y-0.5">
+            {profiles.map((p) => {
+              const isActive = activeProfileId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => switchProfile(p.id)}
+                  className={`w-full text-left px-2.5 py-2 rounded-xl text-[11px] transition-all flex items-center gap-2 border ${
+                    isActive
+                      ? 'bg-accent/10 border-accent/20 text-[#e8e8e0]'
+                      : 'border-transparent text-[#6b6b76] hover:bg-white/[0.04] hover:text-[#a8a8b0] hover:border-white/[0.05]'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full shrink-0 transition-colors ${isActive ? 'bg-accent-green shadow-[0_0_6px_#4ade80]' : 'bg-white/[0.15]'}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium leading-tight">{p.label}</p>
+                    {p.twitterUsername
+                      ? <p className="text-[9px] text-[#4a4a55] truncate">@{p.twitterUsername}</p>
+                      : <p className="text-[9px] text-[#3a3a45] truncate">hesap bağlanmadı</p>
+                    }
+                  </div>
+                </button>
+              );
+            })}
+            <button
+              onClick={() => setPage('settings')}
+              className="w-full text-left px-2.5 py-1.5 text-[10px] text-[#3a3a45] hover:text-[#6b6b72] transition-colors"
+            >
+              + hesap ekle / düzenle →
+            </button>
+          </div>
+        </div>
+
         {/* Status */}
         <div className="mx-3 mb-3 rounded-2xl px-3 py-3 space-y-1.5 border"
           style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}
@@ -150,8 +195,8 @@ export default function App() {
 
       </aside>
 
-      {/* Main content */}
-      <main className="relative flex-1 min-h-0 overflow-hidden bg-transparent">
+      {/* Main content — key ile profil değişince sayfa remount olur */}
+      <main key={activeProfileId} className="relative flex-1 min-h-0 overflow-hidden bg-transparent">
         {page === 'generate'  && <Generate />}
         {page === 'replies'   && <Replies />}
         {page === 'history'   && <History />}

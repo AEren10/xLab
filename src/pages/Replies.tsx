@@ -15,36 +15,21 @@ import { buildReplyPrompt } from '../lib/contextBuilder';
 import { enrichPersonaWithTweets, loadPersonaById, persistEnrichedPersona } from '../lib/persona';
 import { rankContextualTweets } from '../lib/promptHeuristics';
 import { PageHeader } from '../components/PageHeader';
-
-function formatNum(n: number): string {
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
-}
-
-function timeAgo(dateStr: string): string {
-  if (!dateStr) return '';
-  const diff = (Date.now() - new Date(dateStr).getTime()) / 60000;
-  if (diff < 60) return `${Math.round(diff)}dk önce`;
-  return `${Math.round(diff / 60)}sa önce`;
-}
-
-function engScore(t: TweetSearchResult): number {
-  return t.likes + (t.replies || 0) * 5 + (t.retweets || 0) * 2 + (t.views ? Math.round(t.views / 100) : 0);
-}
-
-function scoreColor(score: number): string {
-  if (score >= 75) return 'text-accent-green bg-accent-green/10 border-accent-green/30';
-  if (score >= 50) return 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/30';
-  return 'text-accent-red bg-accent-red/10 border-accent-red/30';
-}
+import {
+  formatNum,
+  timeAgo,
+  engScore,
+  replyScoreColor as scoreColor,
+  normalizeText,
+  shouldRetryReply,
+  type ReplyLength,
+} from '../lib/utils';
 
 const REPLY_LENGTHS = [
   { id: 'short', label: 'Kısa', hint: 'Tek cümle, hızlı reaksiyon' },
   { id: 'standard', label: 'Standart', hint: 'Dengeli, feed içi cevap' },
   { id: 'long', label: 'Uzun', hint: 'İki cümleye kadar, nüanslı' },
 ] as const;
-
-type ReplyLength = typeof REPLY_LENGTHS[number]['id'];
 
 const REPLY_RETRY_MODES = [
   { id: 'same', label: 'Aynı uzunluk', note: 'Mevcut bantta tekrar dene, özü tekrar etme.' },
@@ -56,40 +41,6 @@ const REPLY_RETRY_MODES = [
 
 type ReplyRetryMode = typeof REPLY_RETRY_MODES[number]['id'];
 
-function normalizeText(text: string): string {
-  return (text || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-z0-9çğıöşü\s-]/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function shouldRetryReply(tweet: TweetSearchResult, reply: string, replyLength: ReplyLength): boolean {
-  const cleanReply = normalizeText(reply);
-  const cleanTweet = normalizeText(tweet.text);
-  if (!cleanReply) return true;
-
-  const replyWords = cleanReply.split(' ').filter((w) => w.length > 3);
-  const tweetWords = cleanTweet.split(' ').filter((w) => w.length > 3);
-  const overlap = replyWords.filter((w) => tweetWords.includes(w)).length;
-  const overlapRatio = replyWords.length > 0 ? overlap / replyWords.length : 0;
-
-  const bands: Record<ReplyLength, [number, number]> = {
-    short: [35, 90],
-    standard: [55, 130],
-    long: [90, 180],
-  };
-  const [min, max] = bands[replyLength];
-  if (reply.length < Math.floor(min * 0.8) || reply.length > Math.ceil(max * 1.2)) return true;
-
-  if (overlap >= 5 || overlapRatio >= 0.45) return true;
-  if (cleanTweet && cleanReply.startsWith(cleanTweet.slice(0, 24))) return true;
-  if (/^(açısından|şimdi|tabii ki|tam da|aslında|evet|hayır)\b/i.test(reply.trim())) return true;
-
-  return false;
-}
 
 interface ReplyResult {
   tweetId: string;
@@ -109,6 +60,15 @@ export function Replies() {
   const settings = db.getSettings();
   const hasXquik = Boolean(settings.xquikKey);
   const activeProfile = db.getActiveProfile();
+  // Aktif profilin ayarları global settings'in üzerine yazar
+  const effectiveSettings = {
+    ...settings,
+    niche: activeProfile.niche || settings.niche,
+    defaultPersona: activeProfile.defaultPersona || settings.defaultPersona,
+    toneProfile: activeProfile.toneProfile || settings.toneProfile,
+    twitterUsername: activeProfile.twitterUsername || settings.twitterUsername,
+    hasPremium: activeProfile.hasPremium ?? settings.hasPremium,
+  };
   const [personaId, setPersonaId] = useState(
     () => sessionStorage.getItem('replies_persona') || activeProfile.defaultPersona || settings.defaultPersona || 'hurricane'
   );
@@ -118,7 +78,9 @@ export function Replies() {
     () => (sessionStorage.getItem('replies_length') as ReplyLength) || 'standard'
   );
   const PERSONA_LIST = [
-    { value: 'alperk55',         label: 'alperk55 — Mizahi, ima yüklü' },
+    { value: 'alperk55',         label: 'alperk55 — Tarafsız, ima yüklü' },
+    { value: 'alperk55_fener',   label: 'alperk55 Fener — Fenerbahçe ima' },
+    { value: 'alperk55_gs',      label: 'alperk55 GS — Galatasaray ima' },
     { value: 'hurricane',        label: 'hurricane — Direkt, cesur' },
     { value: 'tr_controversial', label: 'tr_controversial — Tartışma açan' },
     { value: 'tr_casual',        label: 'tr_casual — Samimi, sohbet' },
@@ -313,7 +275,7 @@ export function Replies() {
       const replyPrompt = buildReplyPrompt({
         tweet,
         persona: personaForPrompt,
-        settings,
+        settings: effectiveSettings,
         query,
         inspirationTweets,
         ownTweets: personaTweets,

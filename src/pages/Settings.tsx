@@ -186,7 +186,9 @@ function SettingsRail({
 }
 
 const PERSONA_OPTIONS = [
-  { value: 'alperk55',        label: 'alperk55 — Mizahi, tarafsız görün taraf ima et' },
+  { value: 'alperk55',        label: 'alperk55 — Tarafsız görün, taraf ima et' },
+  { value: 'alperk55_fener',  label: 'alperk55 Fener — Tarafsız görün, Fenerbahçe ima et' },
+  { value: 'alperk55_gs',     label: 'alperk55 GS — Tarafsız görün, Galatasaray ima et' },
   { value: 'hurricane',       label: 'hurricane — Bold, soru sorduran, cesur' },
   { value: 'tr_educational',  label: 'tr_educational — Öğretici, adım adım' },
   { value: 'tr_controversial',label: 'tr_controversial — Tartışma açan' },

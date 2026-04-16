@@ -53,9 +53,10 @@ function hourZone(h: number): string {
 }
 
 export function Analytics() {
+  const activeProfileId = db.getSettings().activeProfileId || undefined;
   const { byHour, byDay, bestHour, bestDay, heatmap, totalPosted } = useMemo(
-    () => db.getTimeAnalytics(),
-    []
+    () => db.getTimeAnalytics(activeProfileId),
+    [activeProfileId]
   );
 
   const maxHourEng = Math.max(...byHour.map((h) => h.avgEng));

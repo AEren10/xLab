@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { TweetVariation } from '../lib/claude';
 import { claudeApi } from '../lib/claude';
-import { SCORING_CRITERIA } from '../lib/skill';
-import { scoreColor } from '../lib/utils';
+// SCORING_CRITERIA — scoring devre dışı, gerekirse geri aç
 import { xquikApi } from '../lib/xquik';
 import type { XquikScore } from '../lib/xquik';
 import { inferMediaOpportunity } from '../lib/promptHeuristics';
@@ -157,28 +156,18 @@ export function TweetCard({
   return (
     <div className="group relative bg-card border border-white/[0.08] rounded-2xl p-4 space-y-3 shadow-[0_18px_50px_rgba(0,0,0,0.22)] hover:-translate-y-0.5 hover:border-white/[0.14] hover:shadow-[0_24px_65px_rgba(0,0,0,0.34)] transition-all duration-200 overflow-hidden">
 
-      {/* Sol üst köşe: yüksek skor çizgisi */}
-      {tweet.total_score >= 85 && (
-        <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-gradient-to-b from-[#4ade80]/80 via-[#4ade80]/50 to-transparent rounded-l-xl" />
-      )}
-
       {/* Tweet metni */}
       <p className="text-[#e8e8e0] text-sm leading-relaxed whitespace-pre-wrap">
         {tweet.text}
       </p>
 
-      {/* Skor + dwell + karakter */}
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`text-sm font-bold px-3 py-1 rounded-full border ${scoreColor(tweet.total_score)}`}>
-            {tweet.total_score}/100
+      {/* Dwell + karakter + Grok badge */}
+      <div className="flex items-center gap-2">
+        {liveScore && (
+          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${liveScore.passed ? 'text-accent-green bg-accent-green/10 border-accent-green/20' : 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20'}`}>
+            Grok {liveScore.total}/100
           </span>
-          {liveScore && (
-            <span className={`text-[10px] font-semibold px-2 py-1 rounded-full border ${liveScore.passed ? 'text-accent-green bg-accent-green/10 border-accent-green/20' : 'text-accent-yellow bg-accent-yellow/10 border-accent-yellow/20'}`}>
-              Grok {liveScore.total}/100
-            </span>
-          )}
-        </div>
+        )}
         <span
           title={dwell.tip}
           className={`text-[10px] px-2 py-0.5 rounded-full border cursor-default ${
@@ -189,35 +178,10 @@ export function TweetCard({
         >
           {dwell.label} okuma
         </span>
-        <span className={`text-xs ${charCount > maxLength ? 'text-accent-red' : 'text-[#6b6b72]'}`}>
+        <span className={`text-xs ml-auto ${charCount > maxLength ? 'text-accent-red' : 'text-[#6b6b72]'}`}>
           {charCount}/{maxLength}
         </span>
       </div>
-
-      {/* Mini skor çubukları */}
-      <div className="space-y-1.5">
-        {Object.entries(SCORING_CRITERIA).map(([key, crit]) => {
-          const val = tweet.scores[key as keyof typeof tweet.scores] ?? 0;
-          const pct = Math.round((val / crit.weight) * 100);
-          return (
-            <div key={key} className="flex items-center gap-2" title={crit.description}>
-              <span className="text-[10px] text-[#6b6b72] w-28 shrink-0 truncate">{crit.label}</span>
-              <div className="flex-1 h-1 bg-white/[0.06] rounded-full overflow-hidden">
-                <div className={`h-full rounded-full transition-all ${scoreBarColor(val, crit.weight)}`}
-                  style={{ width: `${pct}%` }} />
-              </div>
-              <span className="text-[10px] text-[#6b6b72] w-8 text-right">{val}/{crit.weight}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Skor notu */}
-      {tweet.score_reason && (
-        <p className="text-[11px] text-[#6b6b72] italic border-t border-white/[0.05] pt-2">
-          {tweet.score_reason}
-        </p>
-      )}
 
       {/* Grok Canlı Skor */}
       {xquikKey && (

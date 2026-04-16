@@ -175,38 +175,40 @@ function buildInspirationBlock(
   const personaHint = personaRewriteHint(persona);
 
   return `## ${label}
-Bu tweetlerden birini seç. Açılış cümlesini, ritmi ve kapanış mantığını birebir taklit et — sadece konuyu farklılaştır.
+Bu örneklerden birinin yapısını al. Açılış tipini, cümle ritmini ve kapanışı taklit et. Konuyu farklılaştır.
 ${personaHint}
 
-${sorted.map((t, i) => {
+<ornekler>
+${sorted.map((t) => {
   const hook = inferHookType(t.text);
-  return `[${i + 1}] Hook: ${hook} (❤${t.likes} 💬${t.replies || 0})\n"${cleanSnippet(t.text, 200)}"`;
-}).join('\n\n')}`;
+  return `<ornek hook="${hook}" engagement="❤${t.likes} 💬${t.replies || 0}">\n${cleanSnippet(t.text, 200)}\n</ornek>`;
+}).join('\n')}
+</ornekler>`;
 }
 
 function buildLengthContract(length: string, hasPremium: boolean): { guide: string; variationHint: string; emphasis: string } {
   if (length === 'short') {
     return {
-      guide: 'Kısa mod: 70-120 karakter, 8-15 kelime, tek cümle. Fazla açıklama yapma. Vurucu başla, hızlı bitir.',
-      variationHint: 'Varyasyonlar aynı bantta kalsın ama biri daha sert, biri daha alaycı, biri daha direkt olsun.',
-      emphasis: 'Tek yumruk etki.',
+      guide: 'KISA: Tek cümle. Başka cümle yok. Hook = tek yumruk. Bitir.',
+      variationHint: 'Biri sert, biri alaycı, biri direkt — hepsi tek cümle.',
+      emphasis: 'Tek cümle.',
     };
   }
 
   if (length === 'extended') {
     return {
       guide: hasPremium
-        ? 'Uzun mod: 260-420 karakter, 35-70 kelime, 3-5 cümle. Mini giriş + orta bölüm + payoff kur. Gerekirse satır kır.'
-        : 'Uzun mod: 240-280 karakter, 30-45 kelime, 2-4 cümle. Free hesap sınırını geçme ama diğer modlardan bariz uzun yaz.',
-      variationHint: 'Bir varyasyon daha hikayeli, biri daha bilgi ağırlıklı, biri daha güçlü kapanışlı olsun.',
-      emphasis: 'Nefesli ve katmanlı anlatım.',
+        ? 'UZUN: Hook cümle. Sonra 2-3 destekleyici cümle. Sonra güçlü kapanış veya soru. Satır aralarında boşluk bırak.'
+        : 'UZUN: Hook cümle. Sonra 1-2 destekleyici cümle. Kapanış. Toplam 3-4 cümle.',
+      variationHint: 'Biri hikaye tarzı, biri veri/gözlem tarzı, biri soru kapanışlı.',
+      emphasis: 'Hook + gövde + kapanış. Üç parça.',
     };
   }
 
   return {
-    guide: 'Standart mod: 150-220 karakter, 18-30 kelime, 1-2 cümle. Açıklayıcı ama sıkı kal. Ne kısa tweet kadar sert ne uzun tweet kadar dağınık olsun.',
-    variationHint: 'Bir varyasyon kısa açılışlı, biri açıklamalı, biri daha akıcı ve dengeli olsun.',
-    emphasis: 'Orta yoğunluk, net akış.',
+    guide: 'STANDART: Hook cümle. Sonra bir açıklama veya gözlem cümlesi. İkinci bir cümle var — kısa modda değil.',
+    variationHint: 'Biri kısa açılışlı + uzunca ikinci cümle, biri ikisi de orta, biri güçlü kapanışlı.',
+    emphasis: 'İki cümle. Ne tek cümle ne de paragraf.',
   };
 }
 
@@ -342,15 +344,27 @@ Bu tweetin haber özeti, yeniden yazımı ya da temiz paraphrase'i olmasın. Rep
 
 function buildOwnTweetMemoryBlock(ownTweets?: { text: string; likes: number; replies: number; retweets: number }[]): string {
   if (!ownTweets || ownTweets.length === 0) return '';
-  const best = [...ownTweets]
+
+  const analyzed = [...ownTweets]
     .sort((a, b) => (b.likes + b.replies * 5 + b.retweets * 2) - (a.likes + a.replies * 5 + a.retweets * 2))
-    .slice(0, 5)
-    .map((t, i) => `- [${i + 1}] ${cleanSnippet(t.text, 110)} (❤${t.likes} 💬${t.replies} 🔁${t.retweets})`)
+    .slice(0, 4)
+    .map((t) => {
+      const eng = t.likes + t.replies * 5 + t.retweets * 2;
+      // Ne işe yaradı?
+      const signals: string[] = [];
+      if (t.replies > t.likes * 0.15) signals.push('reply çekti — soru/gerilim/açık uç var');
+      else if (t.replies > 0) signals.push('az reply');
+      if (t.retweets > t.likes * 0.1) signals.push('paylaşıldı — güçlü stance veya bilgi');
+      if (t.likes > 50 && signals.length === 0) signals.push('beğenildi — temiz hook');
+      if (eng === 0) signals.push('engagement bilinmiyor');
+      const hook = inferHookType(t.text);
+      return `<kendi_tweet eng="${eng}" hook="${hook}" neden="${signals.join(', ')}">\n${cleanSnippet(t.text, 140)}\n</kendi_tweet>`;
+    })
     .join('\n');
 
-  return `## Kendi Hesap Hafızan
-Bu hesaptan gelen örnekler reply tonunu ayarlamak için referans olsun. Aynı cümleyi kopyalama; ritim, sertlik ve doğallığı al.
-${best}`;
+  return `## Kendi Hesabından Tutan Tweetler
+Bu örneklerden ritim ve hook kalıbını al. Her birinin NEDEN tuttuğuna bak, o mekanizmayı tekrar kur.
+${analyzed}`;
 }
 
 export function buildReplyPrompt(params: {
@@ -435,31 +449,27 @@ export function buildSystemPrompt(
     })
     .join('\n');
 
-  // Hook hafızası: Arşiv'den en iyi 5 tweet (engagement skoruna göre)
-  // Engagement girilmiş tweetler önce gelir; girilmemişse score'a göre sırala
-  const hookMemory = savedTweets && savedTweets.length > 0
-    ? [...savedTweets]
-        .sort((a, b) => {
-          const ea = (a.engagement?.like || 0) + (a.engagement?.reply || 0) * 5 + (a.engagement?.rt || 0) * 2;
-          const eb = (b.engagement?.like || 0) + (b.engagement?.reply || 0) * 5 + (b.engagement?.rt || 0) * 2;
-          if (ea !== eb) return eb - ea;
-          return (b.score || 0) - (a.score || 0);
-        })
-        .slice(0, 5)
-        .map((t) => {
-          const eng = (t.engagement?.like || 0) + (t.engagement?.reply || 0) * 5 + (t.engagement?.rt || 0) * 2;
-          const engNote = eng > 0
-            ? ` (❤${t.engagement.like} 💬${t.engagement.reply} 🔁${t.engagement.rt})`
-            : ` [skor:${t.score}]`;
-          return `  "${t.text}"${engNote}`;
-        })
-        .join('\n')
-    : '';
+  // Hook hafızası: Arşiv'den en iyi tweetler
+  // Önce engagement girilmiş olanlar (gerçek performans), yoksa score'a göre
+  const hookMemory = (() => {
+    if (!savedTweets || savedTweets.length === 0) return '';
+    const engScore = (t: TweetEntry) =>
+      (t.engagement?.like || 0) + (t.engagement?.reply || 0) * 5 + (t.engagement?.rt || 0) * 2;
+    const withEng = savedTweets.filter((t) => engScore(t) > 0).sort((a, b) => engScore(b) - engScore(a));
+    const withoutEng = savedTweets.filter((t) => engScore(t) === 0).sort((a, b) => (b.score || 0) - (a.score || 0));
+    // Engagement girilmişler önce, kalan slotu engagement girilmemişler doldursun
+    const picked = [...withEng.slice(0, 5), ...withoutEng].slice(0, 5);
+    return picked.map((t) => {
+      const eng = engScore(t);
+      const note = eng > 0 ? ` (❤${t.engagement.like} 💬${t.engagement.reply} 🔁${t.engagement.rt})` : '';
+      return `  "${t.text}"${note}`;
+    }).join('\n');
+  })();
 
   const toneNote = settings.toneProfile
     ? `\n## Özel Ton Notu (ÖNCE BU)\n${settings.toneProfile}\n`
     : '';
-  const rewriteNote = `\n## Rewrite Rule\nViral örnekler kopyalanacak cümleler değil; çözülecek mekaniklerdir. Aynı hook mantığını, aynı duygusal sıcaklığı ve aynı ritmi bu persona sesiyle yeniden yaz.\n`;
+  const rewriteNote = ''; // inspirationBlock içinde zaten var, token tasarrufu için kaldırıldı
   const personaMemoryBlock = buildPersonaMemoryBlock(persona, 20, 8);
 
   // algoData öncelik sırası:
@@ -490,51 +500,43 @@ export function buildSystemPrompt(
 
   const algoBlock = liveAlgoContent
     ? `## X Algorithm Rules (Grok — Canlı Veri)\n${liveAlgoContent}`
-    : ALGORITHM_RULES; // canlı veri boşsa statik kural devreye girer
+    : ALGORITHM_RULES_SHORT; // ALGORITHM_RULES (tam versiyon) skill.ts'de arşivde duruyor
 
-  return `# Tweet Generation Expert
+  return `Sen elite bir X (Twitter) stratejisti ve Türkçe metin yazarısın.
 
 ${algoBlock}
 
-## Active Persona: ${persona?.name || 'Default'}
-Tone: ${persona?.tone || 'casual, direct'}
-Language: ${persona?.language || 'tr'}
-Niche: ${settings.niche || 'general'}
+## Persona: ${persona?.name || 'Default'}
+Ton: ${persona?.tone || 'casual, direct'} | Niş: ${settings.niche || 'general'}
 ${toneNote}
-${rewriteNote}
+${styleRules ? `### Stil Kuralları\n${styleRules}\n` : ''}
+${hookExamples ? `### Hook Örnekleri\n<hook_ornekleri>\n${hookExamples}\n</hook_ornekleri>\n` : ''}
+${bestTweets ? `### Bu Persona'dan En İyi Tweetler\n<persona_ornekleri>\n${bestTweets}\n</persona_ornekleri>\n` : ''}
+${hookMemory ? `### Geçmişte Tutan Tweetler\n<arsiv_ornekleri>\n${hookMemory}\n</arsiv_ornekleri>\n` : ''}
 ${personaMemoryBlock ? `${personaMemoryBlock}\n` : ''}
-### Style Rules
-${styleRules}
-
-### Hook Patterns (inspiration, not copy-paste)
-${hookExamples}
-
-### Best Performing Examples
-${bestTweets}
-${hookMemory ? `\n### Geçmişte Tutan Tweetler (bu hesaptan — engagement verisiyle)\nBu örneklerden ritim, açılış tipi ve kapanış mantığını al. Konuyu değil mekanizmayı kopyala.\n${hookMemory}` : ''}
 ## Output Format
-Return ONLY a JSON array. No markdown fences, no explanation:
-[
-  {
-    "text": "tweet text",
-    "scores": {
-      "hook": 0-20,
-      "reply_potential": 0-25,
-      "dwell_potential": 0-18,
-      "information": 0-15,
-      "algorithm": 0-12,
-      "persona": 0-10
-    },
-    "total_score": 0-100,
-    "score_reason": "one sentence explanation"
-  }
-]
+Return ONLY a JSON array. No markdown, no explanation:
+[{"text": "tweet text"}, {"text": "tweet text"}]
 
-## Scoring Notes
-- reply_potential (25 puan — EN KRİTİK): İlk cümle reply daveti açıyor mu? Soru, gerilim, açık uç. reply_engaged_by_author = like'ın 150 katı. Reply almayan tweet algoritmada görünmez.
-- dwell_potential (18 puan): Kaç kişi 2+ dakika okur? Uzun/thread/data/story = yüksek. Kısa hot take = düşük. +10 Grok sinyali.
-- hook (20 puan): İlk cümle 3 saniyede scroll durduruyor mu? Zayıf hook = dwell 0 demek.
-- algorithm: Hashtag yok, emoji yok, em dash yok, link reply'da. Tüm Grok kurallarına uyuyor mu?`;
+/*
+ * SCORING DISABLED — geri açmak için aşağıdaki bloğu uncomment et,
+ * claude.ts > generateTweets içindeki raw.map'i de eski haline döndür.
+ *
+ * [
+ *   {
+ *     "text": "tweet text",
+ *     "scores": { "hook": 0-20, "reply_potential": 0-25, "dwell_potential": 0-18, "information": 0-15, "algorithm": 0-12, "persona": 0-10 },
+ *     "total_score": 0-100,
+ *     "score_reason": "one sentence explanation"
+ *   }
+ * ]
+ *
+ * Scoring Notes:
+ * - reply_potential (25): reply_engaged_by_author = like'ın 150 katı
+ * - dwell_potential (18): 2+ dakika okuma = +10 Grok sinyali
+ * - hook (20): ilk cümle 3 saniyede scroll durduruyor mu?
+ * - algorithm (12): hashtag yok, emoji yok, em dash yok, link reply'da
+ */`;
 }
 
 export function buildUserMessage(params: BuildContextParams): string {
@@ -623,44 +625,29 @@ export function buildUserMessage(params: BuildContextParams): string {
 
   const viralBlock = buildInspirationBlock(viralTweets, persona, 'Bu Konuda En Çok Tutan Tweetler', topic);
 
-  return `## Task
-Generate ${variations} tweet variation(s) about: "${topic}"
+  const variationLengthHint = variations > 1
+    ? `${variations} varyasyon üret. Her biri farklı hook tipi kullansın. 1. alt sınır, 2. orta, 3. üst bant — ama hepsi aynı uzunluk modunda kalsın.`
+    : '1 tweet üret.';
 
-## Configuration
-- Impression type: ${impressionType}
-- Length: ${length} (${lengthGuide[length] || '200-280 characters'})
-- Length contract: ${lengthContract.guide}
-- Angle: ${angleContract.label}
-- Angle contract: ${angleContract.guide}
-- Media preference: ${mediaPreference}
-- Goal: ${goal}
-- Language: Turkish
-- ${premiumNote}
+  // recentPerf: sadece engagement girilmiş veya xquik'ten gelen veriler işe yarar
+  const hasRecentPerf = recentPerf && recentPerf !== 'No history yet';
 
-## Length Variation Rule
-${lengthContract.variationHint}
-${variations > 1 ? `- Çoklu varyasyonda her tweet aynı uzunlukta olmasın.\n- 1. varyasyon: alt sınır\n- 2. varyasyon: orta bant\n- 3. varyasyon: üst bant\n- Ama hepsi seçilen length bandının içinde kalsın.` : ''}
+  return `## Konu
+"${topic}"
 
-## Current Trending Topics (use if relevant)
-${trends}
+## UZUNLUK — DEĞİŞMEZ KURAL
+${lengthContract.guide}
+→ ${lengthContract.emphasis}
+→ Örneklerin uzunluğunu kopyalama. Bu kural her şeyin önünde.
 
-${viralBlock ? `${viralBlock}\n` : ''}
+## Açı: ${angleContract.label}
+${angleContract.guide}
 
-## My Recent Tweet Performance (learn from this)
-${recentPerf}
+## Görev
+${variationLengthHint}
+Türkçe. Hashtag yok. Emoji yok. Hook ilk cümlede. ${premiumNote}
 
-## Important
-- Write in Turkish
-- No hashtags, no emojis
-- End with question or open loop
-- Sound human, not AI-generated
-- First line must hook immediately
-- If generating multiple variations, make each one use a different hook type or angle when possible
-- Keep the selected length mode obvious. Do not let short, standard, and extended collapse into the same word count.
-- Keep the selected angle obvious. Do not let "sivri" and "nüanslı" collapse into the same tone.
-- If media preference is not auto, align the writing with that media form.
-- Borrow the mechanism from the viral examples above, then rewrite it in the active persona's voice
-${externalTrendsBlock ? `\n\n${externalTrendsBlock}` : ''}`;
+${viralBlock ? `${viralBlock}\n` : ''}${hasRecentPerf ? `## Bu Hesaptan Tutan Tweetler (öğren, kopyalama)\n${recentPerf}\n` : ''}${externalTrendsBlock ? `${externalTrendsBlock}\n` : ''}`;
 }
 
 /**
@@ -699,9 +686,9 @@ export function buildCopyPrompt(
 ${algoSection}
 ${personaLine}${toneNote}
 ${personaMemoryBlock ? `${personaMemoryBlock}\n` : ''}
-Length mode: ${lengthContract.guide}
+${lengthContract.guide}
 OUTPUT FORMAT — SADECE bu JSON'u yaz, hiç açıklama ekleme:
-[{"text":"tweet metni","scores":{"hook":0-20,"reply_potential":0-25,"dwell_potential":0-18,"information":0-15,"algorithm":0-12,"persona":0-10},"total_score":0-100,"score_reason":"tek cümle"}]
+[{"text": "tweet metni"}]
 
 ---
 
@@ -746,38 +733,45 @@ export function buildThreadMessage(params: BuildContextParams): string {
   const ownTweetNote = buildOwnTweetMemoryBlock(ownTweetCandidates);
   const personaMemoryBlock = buildPersonaMemoryBlock(persona, 10, 5);
 
-  return `## Görev
-"${topic}" konusunda 4-5 tweet'lik thread üret.
+  // Haber/breaking news modu tespiti
+  const isBreaking = /haber|açıkladı|duyurdu|son dakika|transfer|imzaladı|ayrıldı|atandı|istifa|karar|açıklandı|resmi/i.test(topic);
+  const angleGuide = buildAngleContract(angle).guide;
 
-## Thread Yazım Stratejisi
-- İlk tweet tek başına güçlü bir hook olmalı: iddia, merak boşluğu veya kontrast kur.
-- İkinci tweet bağlam açmalı: "neden bu konu önemli?" sorusunu cevapla.
-- Üçüncü tweet asıl değeri vermeli: framework, veri, örnek veya net çıkarım.
-- Dördüncü tweet dönüş noktası olmalı: beklenmeyen insight, karşılaştırma veya mini hikaye.
-- Son tweet CTA olmalı: soru, açık uç, reply daveti veya bookmark sebebi.
-- Her tweet bağımsız okunabilir olsun ama bir sonrakini de merak ettirsin.
-- Aynı hook'u tekrar etme; her tweet kendi işini yapsın.
-- Farklı tweetlerde aynı giriş kalıbını tekrar etme; ritmi bilinçli çeşitlendir.
-- Angle tercihi: ${buildAngleContract(angle).guide}
-- Media tercihi: ${mediaMode || 'auto'}
+  const threadStructure = isBreaking
+    ? `## Thread Yapısı — HABER MODU
+Tweet 1 (hook): Olayı tek cümlede ver. Net, direkt, merak yaratır. "Ne oldu?" sorusunu cevapla.
+Tweet 2 (detay): Kim, ne zaman, nasıl? Sayı veya detay ekle. Yüzeysel değil, somut bilgi.
+Tweet 3 (bağlam): Bu neden önemli? Geçmişle bağlantı kur ya da daha büyük resmi göster.
+Tweet 4 (yorum): Senin tarafsız ama ima yüklü yorumun. Okuyucu taraf seçsin.
+Tweet 5 (cta): Açık uç, soru veya "siz ne düşünüyorsunuz" tarzı reply daveti.`
+    : `## Thread Yapısı — ANALIZ MODU
+Tweet 1 (hook): İddia, kontrast veya merak boşluğu. Tek başına güçlü, devamını merak ettir.
+Tweet 2 (bağlam): Neden bu konu önemli şimdi? Güncel bağlantı kur.
+Tweet 3 (içerik): Ana değer — veri, örnek, framework veya net çıkarım.
+Tweet 4 (dönüş): Beklenmeyen açı, karşılaştırma veya kısa hikaye. Tempo değişimi yap.
+Tweet 5 (cta): Reply daveti. Soru, açık uç veya "bookmark sebebi" ol.`;
 
-## Kurallar
-- Her tweet 180-260 karakter
-- Türkçe, hashtag yok, emoji yok
-- Her tweet sonrakini merak ettirmeli
-- Thread tek bir fikir etrafında dönmeli, ama her tweet yeni bir katman eklemeli
-- ${premiumNote}
-  - Hedef: ${goal}
-${personaMemoryBlock ? `\n${personaMemoryBlock}\n` : ''}${trends ? `\n## Radar Gündem\n${trends}` : ''}${viralBlock}${ownTweetNote ? `\n${ownTweetNote}` : ''}
+  return `## Konu
+"${topic}"
+${isBreaking ? '⚡ Haber thread modu — hız ve netlik öncelikli\n' : ''}
+${threadStructure}
+
+## Genel Kurallar
+- Her tweet 160-240 karakter — ne çok kısa ne paragraf
+- Türkçe, hashtag yok, emoji yok, ${premiumNote}
+- Her tweet öncekini tamamlar ama bağımsız okunabilir
+- Aynı cümle girişini iki tweet'te tekrar etme — ritmi çeşitlendir
+- Angle: ${angleGuide}
+- Hedef: ${goal}
+${personaMemoryBlock ? `\n${personaMemoryBlock}\n` : ''}${trends ? `\n## Güncel Gündem\n${trends}\n` : ''}${viralBlock}${ownTweetNote ? `\n${ownTweetNote}\n` : ''}
 ## Output Format — SADECE bu JSON, markdown yok:
 {
   "tweets": [
     { "text": "tweet 1", "position": 1, "type": "hook" },
     { "text": "tweet 2", "position": 2, "type": "content" },
     { "text": "tweet 3", "position": 3, "type": "content" },
-    { "text": "tweet 4", "position": 4, "type": "cta" }
-  ],
-  "total_score": 0-100,
-  "score_reason": "tek cümle"
+    { "text": "tweet 4", "position": 4, "type": "content" },
+    { "text": "tweet 5", "position": 5, "type": "cta" }
+  ]
 }`;
 }

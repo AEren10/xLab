@@ -9,6 +9,7 @@ const KEYS = {
 
 export interface TweetEntry {
   id: number;
+  profileId?: string;       // hangi hesap profiline ait — undefined = legacy/ortak
   text: string;
   topic: string;
   persona: string;
@@ -20,10 +21,9 @@ export interface TweetEntry {
   postedAt?: string;
   engagement: { like: number; reply: number; rt: number; quote: number };
   xSynced?: boolean;
-  // Reply arşivi için
   entryType?: 'tweet' | 'reply';
   replyTo?: { author: string; handle: string; tweetId: string; text: string };
-  xquikScore?: number; // Grok checklist skoru (0-100)
+  xquikScore?: number;
 }
 
 export interface AccountProfile {
@@ -61,7 +61,13 @@ const set = (key: string, val: unknown) =>
 
 export const db = {
   // ── Tweets ───────────────────────────────────────────────────────────────
-  getTweets: (): TweetEntry[] => get(KEYS.tweets, []),
+  // profileId verilirse sadece o profile ait tweetler döner
+  // verilmezse tüm tweetler döner (Analytics, genel sorgular için)
+  getTweets: (profileId?: string): TweetEntry[] => {
+    const all = get<TweetEntry[]>(KEYS.tweets, []);
+    if (!profileId) return all;
+    return all.filter((t) => !t.profileId || t.profileId === profileId);
+  },
 
   saveTweet: (tweet: Omit<TweetEntry, 'id' | 'createdAt'>): TweetEntry => {
     const tweets = get<TweetEntry[]>(KEYS.tweets, []);
@@ -106,7 +112,40 @@ export const db = {
     set(KEYS.settings, { ...get(KEYS.settings, {}), ...s }),
 
   // ── Account Profiles ──────────────────────────────────────────────────────
-  getProfiles: (): AccountProfile[] => get(KEYS.profiles, []),
+  getProfiles: (): AccountProfile[] => {
+    const saved = get<AccountProfile[]>(KEYS.profiles, []);
+    const defaults: AccountProfile[] = [
+      {
+        id: 'profile_fener',
+        label: 'Fenerbahçe Sayfası',
+        niche: 'futbol',
+        defaultPersona: 'alperk55_fener',
+        toneProfile: 'Fenerbahçe taraftarısın ama bunu direkt belli etme. Tarafsız gözlemci gibi konuş, ama Fenerbahçe lehine ima yap. Rakiplerin şansını, hakemlerin kararlarını nötr ama şüpheci çerçevele.',
+        twitterUsername: '',
+        hasPremium: false,
+      },
+      {
+        id: 'profile_gs',
+        label: 'Galatasaray Sayfası',
+        niche: 'futbol',
+        defaultPersona: 'alperk55_gs',
+        toneProfile: 'Galatasaray taraftarısın ama bunu direkt belli etme. Tarafsız gözlemci gibi konuş, ama Galatasaray lehine ima yap. GS\'nin büyüklüğünü ve Avrupa performansını öne çıkar, rakiplerin şansını nötr ama şüpheci çerçevele.',
+        twitterUsername: '',
+        hasPremium: false,
+      },
+    ];
+    // Varsayılan profilleri mevcut listede yoksa ekle
+    let changed = false;
+    const merged = [...saved];
+    for (const def of defaults) {
+      if (!merged.find((p) => p.id === def.id)) {
+        merged.push(def);
+        changed = true;
+      }
+    }
+    if (changed) set(KEYS.profiles, merged);
+    return merged;
+  },
 
   saveProfile: (profile: AccountProfile) => {
     const profiles = get<AccountProfile[]>(KEYS.profiles, []);
@@ -150,8 +189,10 @@ export const db = {
   },
 
   // ── Analytics ────────────────────────────────────────────────────────────
-  getAnalytics: () => {
-    const tweets = get<TweetEntry[]>(KEYS.tweets, []);
+  getAnalytics: (profileId?: string) => {
+    const tweets = profileId
+      ? get<TweetEntry[]>(KEYS.tweets, []).filter((t) => !t.profileId || t.profileId === profileId)
+      : get<TweetEntry[]>(KEYS.tweets, []);
     const posted = tweets.filter((t) => t.postedAt);
     const avgScore = tweets.length
       ? tweets.reduce((a, t) => a + t.score, 0) / tweets.length
@@ -183,8 +224,9 @@ export const db = {
    * heatmap[dayIndex][hour] = { count, totalEng, avgEng }
    * dayIndex: 0=Pazartesi ... 6=Pazar
    */
-  getTimeAnalytics: () => {
-    const tweets = get<TweetEntry[]>(KEYS.tweets, []);
+  getTimeAnalytics: (profileId?: string) => {
+    const all = get<TweetEntry[]>(KEYS.tweets, []);
+    const tweets = profileId ? all.filter((t) => !t.profileId || t.profileId === profileId) : all;
     const posted = tweets.filter(
       (t) => t.postedAt && (t.engagement.like + t.engagement.reply + t.engagement.rt > 0)
     );

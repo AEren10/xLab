@@ -71,11 +71,11 @@ export const claudeApi = {
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 1200,
+        max_tokens: 600,
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: [{
           role: 'user',
-          content: `${userMessage}\n\nGenerate ${variations} tweet variations. Return ONLY a JSON array, no markdown.`,
+          content: `${userMessage}\n\nGenerate ${variations} tweet variations. Return ONLY a JSON array of objects with a "text" field. No markdown, no scores.`,
         }],
       }),
     });
@@ -86,10 +86,17 @@ export const claudeApi = {
     }
 
     const data = await res.json();
-    console.info('[claude] response:', JSON.stringify(data).slice(0, 500));
     const text = data.content?.[0]?.text || '[]';
-    console.info('[claude] text:', text.slice(0, 300));
-    return safeParseJSON<TweetVariation[]>(text, []);
+    // Scoring devre dışı — Claude sadece metin döndürüyor.
+    // Skor alanları varsayılan değerle doldurulur; xquik skoru asıl sıralama kaynağı.
+    // Scoring'i geri açmak için contextBuilder.ts > Output Format bloğunu uncomment et.
+    const raw = safeParseJSON<{ text: string }[]>(text, []);
+    return raw.map((t) => ({
+      text: t.text || '',
+      scores: { hook: 0, reply_potential: 0, dwell_potential: 0, information: 0, algorithm: 0, persona: 0 },
+      total_score: 0,
+      score_reason: '',
+    }));
   },
 
   async generateThread(
@@ -103,7 +110,7 @@ export const claudeApi = {
       headers: baseHeaders(apiKey),
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 2500,
+        max_tokens: 1400,
         system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: userMessage }],
       }),
@@ -116,7 +123,13 @@ export const claudeApi = {
 
     const data = await res.json();
     const text = data.content?.[0]?.text || 'null';
-    return safeParseJSON<TweetThread | null>(text, null);
+    const raw = safeParseJSON<{ tweets: ThreadTweet[]; total_score?: number; score_reason?: string } | null>(text, null);
+    if (!raw) return null;
+    return {
+      tweets: raw.tweets || [],
+      total_score: raw.total_score ?? 0,
+      score_reason: raw.score_reason ?? '',
+    };
   },
 
   /**

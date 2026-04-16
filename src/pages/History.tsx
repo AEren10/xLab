@@ -44,15 +44,16 @@ type FilterType = 'all' | 'tweet' | 'reply';
 
 export function History() {
   const settings = db.getSettings();
+  const activeProfileId = settings.activeProfileId || undefined;
   const [allTweets, setAllTweets] = useState<TweetEntry[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState('');
 
-  const analytics = db.getAnalytics();
+  const analytics = db.getAnalytics(activeProfileId);
 
-  useEffect(() => { setAllTweets(db.getTweets()); }, []);
-  const refresh = () => setAllTweets(db.getTweets());
+  useEffect(() => { setAllTweets(db.getTweets(activeProfileId)); }, [activeProfileId]);
+  const refresh = () => setAllTweets(db.getTweets(activeProfileId));
 
   // Filtrelenmiş liste
   const tweets = allTweets.filter((t) => {
@@ -98,7 +99,7 @@ export function History() {
     }
 
     const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 60);
-    const saved = db.getTweets();
+    const saved = db.getTweets(activeProfileId);
     let updated = 0;
 
     for (const saved_tweet of saved) {
