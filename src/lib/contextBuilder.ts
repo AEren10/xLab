@@ -175,12 +175,13 @@ function buildInspirationBlock(
   const personaHint = personaRewriteHint(persona);
 
   return `## ${label}
-Bu tweetlerden birinin yapısını doğrudan al. Açılış cümlesini, ritmi ve kapanışı birebir taklit et — sadece konuyu değiştir.
+Bu tweetlerden birini seç. Açılış cümlesini, ritmi ve kapanış mantığını birebir taklit et — sadece konuyu farklılaştır.
 ${personaHint}
 
-${sorted.map((t, i) =>
-  `[${i + 1}] (❤${t.likes} 💬${t.replies || 0})\n"${cleanSnippet(t.text, 200)}"`
-).join('\n\n')}`;
+${sorted.map((t, i) => {
+  const hook = inferHookType(t.text);
+  return `[${i + 1}] Hook: ${hook} (❤${t.likes} 💬${t.replies || 0})\n"${cleanSnippet(t.text, 200)}"`;
+}).join('\n\n')}`;
 }
 
 function buildLengthContract(length: string, hasPremium: boolean): { guide: string; variationHint: string; emphasis: string } {
