@@ -435,16 +435,24 @@ export function buildSystemPrompt(
     })
     .join('\n');
 
-  // Hook hafızası: Arşiv'den en iyi 3 tweet (engagement skoruna göre)
+  // Hook hafızası: Arşiv'den en iyi 5 tweet (engagement skoruna göre)
+  // Engagement girilmiş tweetler önce gelir; girilmemişse score'a göre sırala
   const hookMemory = savedTweets && savedTweets.length > 0
     ? [...savedTweets]
         .sort((a, b) => {
           const ea = (a.engagement?.like || 0) + (a.engagement?.reply || 0) * 5 + (a.engagement?.rt || 0) * 2;
           const eb = (b.engagement?.like || 0) + (b.engagement?.reply || 0) * 5 + (b.engagement?.rt || 0) * 2;
-          return eb - ea;
+          if (ea !== eb) return eb - ea;
+          return (b.score || 0) - (a.score || 0);
         })
-        .slice(0, 3)
-        .map((t) => `  "${t.text}"`)
+        .slice(0, 5)
+        .map((t) => {
+          const eng = (t.engagement?.like || 0) + (t.engagement?.reply || 0) * 5 + (t.engagement?.rt || 0) * 2;
+          const engNote = eng > 0
+            ? ` (❤${t.engagement.like} 💬${t.engagement.reply} 🔁${t.engagement.rt})`
+            : ` [skor:${t.score}]`;
+          return `  "${t.text}"${engNote}`;
+        })
         .join('\n')
     : '';
 
@@ -503,7 +511,7 @@ ${hookExamples}
 
 ### Best Performing Examples
 ${bestTweets}
-${hookMemory ? `\n### Senin En İyi Tweetlerin (kendi tarzın — birebir kopyalama yok, dinamiği al)\n${hookMemory}` : ''}
+${hookMemory ? `\n### Geçmişte Tutan Tweetler (bu hesaptan — engagement verisiyle)\nBu örneklerden ritim, açılış tipi ve kapanış mantığını al. Konuyu değil mekanizmayı kopyala.\n${hookMemory}` : ''}
 ## Output Format
 Return ONLY a JSON array. No markdown fences, no explanation:
 [
