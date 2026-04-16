@@ -23,29 +23,18 @@ function topicTokens(topic: string): string[] {
 }
 
 const SINGLE_TOPIC_CONTEXT_TERMS = [
-  'mac',
-  'maci',
-  'match',
-  'injury',
-  'injuries',
-  'sakat',
-  'sakatlik',
-  'lineup',
-  'kadro',
-  'saha',
-  'pitch',
-  'anfield',
-  'goal',
-  'gol',
-  'manager',
-  'coach',
-  'transfer',
-  'form',
-  'derbi',
-  'vs',
-  'post-match',
-  'prematch',
-  'pre-match',
+  'haber',
+  'yorum',
+  'analiz',
+  'gelisme',
+  'aciklama',
+  'son dakika',
+  'resmi',
+  'karar',
+  'tepki',
+  'tartisma',
+  'gundem',
+  'trend',
 ];
 
 export function buildTopicSearchQueries(topic: string): string[] {
@@ -56,23 +45,12 @@ export function buildTopicSearchQueries(topic: string): string[] {
   const tokens = topicTokens(cleaned);
 
   if (tokens.length <= 1) {
-    const root = cleaned;
-    queries.push(
-      `${root} maç`,
-      `${root} injury`,
-      `${root} sakatlık`,
-      `${root} lineup`,
-      `${root} saha`,
-    );
+    queries.push(`${cleaned} hakkında`, `${cleaned} yorum`);
   } else {
-    queries.push(
-      `${cleaned} yorum`,
-      `${cleaned} maç`,
-      `${cleaned} analiz`,
-    );
+    queries.push(`${cleaned} yorum`, `${cleaned} analiz`);
   }
 
-  return uniqueStrings(queries).slice(0, 6);
+  return uniqueStrings(queries).slice(0, 4);
 }
 
 export function buildTopicSearchLanguages(topic: string): Array<'tr' | 'en'> {

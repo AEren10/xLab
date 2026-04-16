@@ -172,27 +172,15 @@ function buildInspirationBlock(
   if (!tweets || tweets.length === 0) return '';
 
   const sorted = pickDiverseTweets(tweets, 4, topic);
-  const hookSummary = summarizeHookTypes(sorted);
-
   const personaHint = personaRewriteHint(persona);
+
   return `## ${label}
-Bu tweetlerin içinden bir kalıp seç. Hook yapısını, cümle ritmini ve kapanış mantığını çöz.
-Kelimeyi değil mekanizmayı al. Aynı kalıp, yeni cümle.
+Bu tweetlerden birinin yapısını doğrudan al. Açılış cümlesini, ritmi ve kapanışı birebir taklit et — sadece konuyu değiştir.
 ${personaHint}
 
-## Hook Kilidi
-Bu referanslarda baskın hook tipi: ${hookSummary.dominant}
-Görülen hook'lar: ${hookSummary.all.join(', ')}
-Kural: Yeni tweet/yanıt üretirken bu hook tipine yakın kal. Hook'u değiştireceksen, aynı etkiyi başka bir mekanikle kur.
-
-${sorted.map((t, i) => {
-  const score = scoreTweet(t);
-  const hook = inferHookType(t.text);
-  const mechanic = inferMechanic(t);
-  return `[${i + 1}] Skor:${score} (❤${t.likes} 💬${t.replies || 0} 🔁${t.retweets || 0})\nHook: ${hook}\nMekanik: ${mechanic}\nTweet: "${cleanSnippet(t.text, 180)}"`;
-}).join('\n\n')}
-
-  Kural: Referans tweetin yüzeyini değil, mekanizmasını taklit et. Persona sesiyle, ama yeni kelimelerle yeniden kur.`;
+${sorted.map((t, i) =>
+  `[${i + 1}] (❤${t.likes} 💬${t.replies || 0})\n"${cleanSnippet(t.text, 200)}"`
+).join('\n\n')}`;
 }
 
 function buildLengthContract(length: string, hasPremium: boolean): { guide: string; variationHint: string; emphasis: string } {
